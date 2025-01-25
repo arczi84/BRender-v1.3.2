@@ -18,10 +18,18 @@ target_include_directories(brender-inc-ddi INTERFACE
         $<INSTALL_INTERFACE:ddi>
         )
 
+if(CMAKE_C_COMPILER_ID MATCHES "OpenWatcom")
+    set(preprocess_cmd "wcc" "-p")
+    set(macro_prefix "-d")
+else()
+    set(preprocess_cmd "${CMAKE_C_COMPILER}" "-E")
+    set(macro_prefix "-D")
+endif()
+
 add_custom_command(
         OUTPUT dev_objs.cgh
         # This will work with MSVC and GCC
-        COMMAND "${CMAKE_C_COMPILER}" -D__CLASSGEN__ -E "${CMAKE_CURRENT_SOURCE_DIR}/dev_objs.hpp" > dev_objs.tmp
+        COMMAND ${preprocess_cmd} ${macro_prefix}__CLASSGEN__ "${CMAKE_CURRENT_SOURCE_DIR}/dev_objs.hpp" > dev_objs.tmp
         COMMAND "${PERL_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../../make/classgen.pl" < dev_objs.tmp > dev_objs.cgh
         MAIN_DEPENDENCY "${CMAKE_CURRENT_SOURCE_DIR}/dev_objs.hpp"
         DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../../make/classgen.pl"

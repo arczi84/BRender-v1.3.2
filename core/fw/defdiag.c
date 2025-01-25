@@ -10,11 +10,11 @@
 
 BR_RCS_ID("$Id: defdiag.c 1.1 1997/12/10 16:41:05 jon Exp $")
 
-static void BrNullWarning(char *message)
+static void BR_CALLBACK BrNullWarning(char *message)
 {
 }
 
-static void BrNullFailure(char *message)
+static void BR_CALLBACK BrNullFailure(char *message)
 {
 }
 

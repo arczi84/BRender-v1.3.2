@@ -11,16 +11,16 @@
 
 BR_RCS_ID("$Id: defmem.c 1.1 1997/12/10 16:41:06 jon Exp $")
 
-static void *BrNullAllocate(br_size_t size, br_uint_8 type)
+static void *BR_CALLBACK BrNullAllocate(br_size_t size, br_uint_8 type)
 {
 	return 0;
 }
 
-static void BrNullFree(void *mem)
+static void BR_CALLBACK BrNullFree(void *mem)
 {
 }
 
-static br_size_t BrNullInquire(br_uint_8 type)
+static br_size_t BR_CALLBACK BrNullInquire(br_uint_8 type)
 {
 	return 0;
 }
