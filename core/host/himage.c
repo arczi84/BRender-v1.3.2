@@ -11,7 +11,7 @@
 #include "host.h"
 #include "host_ip.h"
 
-#ifdef __DOS__
+#if defined(__DOS__) || defined(AMIGA)
 
 void * BR_RESIDENT_ENTRY HostImageLoad(char *name)
 {

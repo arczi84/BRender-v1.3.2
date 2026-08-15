@@ -22,7 +22,11 @@ static void actorRenderOnScreen(br_actor *ap,
 								br_uint_8 style,
 								br_uint_16 t);
 
-void BR_PUBLIC_ENTRY BrDbModelRender(br_actor *actor,
+void BR_PUBLIC_ENTRY
+#ifdef AMIGA
+__attribute__((optimize("-fno-unroll-loops")))
+#endif
+BrDbModelRender(br_actor *actor,
 				  br_model *model,
 				  br_material *material,
 				  void *render_data,
