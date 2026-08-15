@@ -50,7 +50,6 @@
 #endif
 
 #if BR_ENDIAN_LITTLE
-
 /*
  * Network<->Host
  */

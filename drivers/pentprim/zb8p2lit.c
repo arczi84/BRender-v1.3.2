@@ -253,7 +253,7 @@ lineDrawn:
 //     }
 // }
 
-void BR_ASM_CALL TriangleRender_ZTI_I8_D16_POW2(brp_block *block, int pow2, int skip_setup, va_list va) {
+void BR_ASM_CALL __attribute__((optimize("Ofast"))) TriangleRender_ZTI_I8_D16_POW2(brp_block *block, int pow2, int skip_setup, va_list va) {
 	brp_vertex *v0; // [esp+18h] [ebp+Ch]
     brp_vertex *v1; // [esp+1Ch] [ebp+10h]
     brp_vertex *v2; // [esp+20h] [ebp+14h]
@@ -337,9 +337,9 @@ void BR_ASM_CALL TriangleRender_ZTI_I8_D16_POW2(brp_block *block, int pow2, int 
 	workspace.xm_f = eax.v;
 
 // 	fstp qword ptr workspace.scanAddress
-	FSTP64(&workspace.scanAddress);
+	FSTP64(&workspace.scanAddress_double);
 // 	fstp qword ptr workspace.depthAddress
-	FSTP64(&workspace.depthAddress);
+	FSTP64(&workspace.depthAddress_double);
 
 // 	mov workspace.d_xm_f,ebx
 	workspace.d_xm_f = ebx.v;

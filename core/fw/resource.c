@@ -120,7 +120,6 @@ static void *ResToUser(struct resource_header *r)
 static struct resource_header *UserToRes(void *r)
 {
 	br_uint_8 *p = r;
-	struct resource_header *res;
 
 	/*
 	 * the last byte of the resource will always be non-zero -
@@ -137,7 +136,7 @@ static struct resource_header *UserToRes(void *r)
 #else
     p -= offsetof(struct resource_header, class) + sizeof(((struct resource_header *)NULL)->class);
 #endif
-	res = (struct resource_header *)p;
+	struct resource_header *res = (struct resource_header *)p;
 
 #if BR_RES_TAGGING
     UASSERT(res->magic_ptr == res);

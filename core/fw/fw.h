@@ -128,8 +128,8 @@ extern br_framework_state BR_ASM_DATA fw;
  */
 #define BR_RES_TAGGING 1
 #else
-#define BR_RES_TRACKING 1
-#define BR_RES_TAGGING 1
+//#define BR_RES_TRACKING 1
+//#define BR_RES_TAGGING 1
 #endif
 
 /*

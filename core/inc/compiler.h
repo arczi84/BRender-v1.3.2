@@ -11,7 +11,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
-
+#include <machine/endian.h>
 /*
  * Fixed bitsize integers
  */
@@ -254,9 +254,14 @@ typedef float br_float;
 #define BR_SUFFIX_HOST "-GCC"
 
 #define BR_HAS_FAR	0
-
+#if defined(BYTE_ORDER) && (BYTE_ORDER == BIG_ENDIAN)
+//IS_BIGENDIAN defined in cmakelists.txt
+#define BR_ENDIAN_BIG		1
+#define BR_ENDIAN_LITTLE	0
+#else
 #define BR_ENDIAN_BIG		0
 #define BR_ENDIAN_LITTLE	1
+#endif
 
 /*
  * IBM CSet++

@@ -22,7 +22,7 @@ static void actorRenderOnScreen(br_actor *ap,
 								br_uint_8 style,
 								br_uint_16 t);
 
-void BR_PUBLIC_ENTRY BrDbModelRender(br_actor *actor,
+void BR_PUBLIC_ENTRY __attribute__((optimize("-fno-unroll-loops")))  BrDbModelRender(br_actor *actor,
 				  br_model *model,
 				  br_material *material,
 				  void *render_data,
@@ -30,6 +30,7 @@ void BR_PUBLIC_ENTRY BrDbModelRender(br_actor *actor,
 				  int on_screen,
 				  int use_custom)
 {
+
 	br_int_32 count;
 	br_token_value tv[] = {
 		{BRT_V1INSERT_FUNCTION_P,	0},
@@ -48,7 +49,7 @@ void BR_PUBLIC_ENTRY BrDbModelRender(br_actor *actor,
 	 * Mark local copy of model_to_screen as invalid
 	 */
 	v1db.model_to_screen_valid = BR_FALSE;
-
+ //printf("BrDbModelRender: style = %d\n", style);
 	/*
 	 * If model has custom callback, keep following it until
 	 * a model is reached
@@ -64,7 +65,7 @@ void BR_PUBLIC_ENTRY BrDbModelRender(br_actor *actor,
 
 	if(model->prepared == NULL && model->stored == NULL)
 		BR_ERROR1("Tried to render un-prepared model %s",model->identifier?model->identifier:"<NULL>");
-
+//printf("BrDbModelRender 1\n");
 	/*
 	 * Optional preparation for Z-Sort
 	 */
@@ -79,7 +80,7 @@ void BR_PUBLIC_ENTRY BrDbModelRender(br_actor *actor,
 		}
 
 		ot->visits++;
-
+//printf("BrDbModelRender 2\n");
 		RendererPartSet(v1db.renderer, BRT_HIDDEN_SURFACE, 0,
 			BRT_V1ORDER_TABLE_P, (br_value){.p = ot});
 
@@ -96,8 +97,13 @@ void BR_PUBLIC_ENTRY BrDbModelRender(br_actor *actor,
 			RendererPartSetMany(v1db.renderer, BRT_HIDDEN_SURFACE, 0, tv, &count);
 		}
 	}
+//printf("BrDbModelRender 3\n");
+if (v1db.bounds_call == NULL) {
+    //printf("v1db.bounds_call is NULL\n");
+}
 
 	if(v1db.bounds_call) {
+		//printf("BrDbModelRender 3.1\n");
 		br_int_32 c;
 		char buffer[sizeof(br_vector2)*2];
 		br_token_value tv[] = {
@@ -105,13 +111,14 @@ void BR_PUBLIC_ENTRY BrDbModelRender(br_actor *actor,
 			{BRT_AS_VECTOR2_SCALAR(MAX), 0},
 			{0,},
 		};
-
+//printf("BrDbModelRender 3.2\n");
 		br_int_32 int_bounds[4];
 
 		/*
 		 * Clear bounds
 		 */
 		RendererStateDefault(v1db.renderer, BR_STATE_BOUNDS);
+//printf("BrDbModelRender 3.3\n");
 
 		RenderStyleCalls[style](actor, model, material, render_data, style, on_screen);
 
@@ -119,12 +126,12 @@ void BR_PUBLIC_ENTRY BrDbModelRender(br_actor *actor,
 	 	 * Fetch bounds and call user op.
 		 */
 		RendererPartQueryMany(v1db.renderer, BRT_BOUNDS, 0, tv, buffer, sizeof(buffer), &c);
-
+//printf("BrDbModelRender 3.4\n");
 		int_bounds[0] = BrScalarToInt(((br_vector3 *)tv[0].v.p)->v[0]);
 		int_bounds[1] = BrScalarToInt(((br_vector3 *)tv[0].v.p)->v[1]);
 		int_bounds[2] = BrScalarToInt(((br_vector3 *)tv[1].v.p)->v[0]);
 		int_bounds[3] = BrScalarToInt(((br_vector3 *)tv[1].v.p)->v[1]);
-
+//printf("BrDbModelRender 3.5\n");
 		/*
 		 * Clamp to screen boundary
 		 */
@@ -156,7 +163,7 @@ void BR_PUBLIC_ENTRY BrDbModelRender(br_actor *actor,
 		int_bounds[1] -= v1db.colour_buffer->origin_y;
 		int_bounds[2] -= v1db.colour_buffer->origin_x;
 		int_bounds[3] -= v1db.colour_buffer->origin_y;
-
+//printf("BrDbModelRender 4\n");
 
 		if((int_bounds[0] <= int_bounds[2]) &&
 		   (int_bounds[1] <= int_bounds[3]) ) {
@@ -167,8 +174,22 @@ void BR_PUBLIC_ENTRY BrDbModelRender(br_actor *actor,
 		}
 
 	} else {
+		//printf("BrDbModelRender 3.6\n");
+		if (actor == NULL || model == NULL || material == NULL || render_data == NULL) {
+			//printf("Error: Invalid arguments passed to RenderStyleCalls[%d]\n", style);
+			//return; // lub odpowiednia obsługa błędu
+		}
+
+		//if (RenderStyleCalls[style] == NULL)
+    		//printf("Error: RenderStyleCalls[%d] is NULL\n", style);
+		//printf("Calling RenderStyleCalls[%d] with args:\n", style);
+//printf(" actor=%p, model=%p, material=%p, render_data=%p, style=%d, on_screen=%d\n",
+   //     (void*)actor, (void*)model, (void*)material, (void*)render_data, style, on_screen);
+		//RenderStyleCalls[style](actor, model, material, render_data, style, on_screen);
 		RenderStyleCalls[style](actor, model, material, render_data, style, on_screen);
+		//printf("BrDbModelRender 3.7\n");
 	}
+	//printf("BrDbModelRender 5\n");
 }
 
 br_uint_32 BR_PUBLIC_ENTRY BrOnScreenCheck(br_bounds3 *bounds)
@@ -298,6 +319,7 @@ static void actorRender(br_actor *ap,
 		switch(ap->type) {
 
 		case BR_ACTOR_MODEL:
+		//printf("BR_ACTOR_MODEL\n");
 			/*
 			 * This is a model -  see if model's bounding box is on screen
 			 */
@@ -308,6 +330,7 @@ static void actorRender(br_actor *ap,
 			break;
 
 		case BR_ACTOR_BOUNDS:
+		//printf("BR_ACTOR_BOUNDS\n");
 			/*
 			 * A bounding box - truncate whole tree if rejected
 			 */
@@ -317,6 +340,7 @@ static void actorRender(br_actor *ap,
 			break;
 
 		case BR_ACTOR_BOUNDS_CORRECT:
+		//printf("BR_ACTOR_BOUNDS_CORRECT 1\n");
 			/*
 			 * A garuanteed bounding box - test to see if it is on screen
 			 */
@@ -326,6 +350,7 @@ static void actorRender(br_actor *ap,
 				/*
 				 * Bounding box is completely on screen - process children with special loop
 				 */
+				//printf("OSC_ACCEPT\n");
 				BR_FOR_SIMPLELIST(&ap->children, a)
 					actorRenderOnScreen(a,this_model,this_material,this_render_data, style, t);
 				/* FALL THROUGH */
@@ -336,7 +361,7 @@ static void actorRender(br_actor *ap,
 			}
 
 		}
-
+//printf("BR_ACTOR_BOUNDS_CORRECT 2\n");
 		/*
 		 * Recurse for children
 		 */
@@ -354,18 +379,22 @@ static void actorRender(br_actor *ap,
 	 * Save the current transforms
 	 */
 	RendererStatePush(v1db.renderer, BR_STATE_MATRIX);
-
+//printf("BR_ACTOR_BOUNDS_CORRECT 3\n");
 	t = prependActorTransform(ap, t);
 
 	switch(ap->type) {
 
 	case BR_ACTOR_MODEL:
+		//printf("BR_ACTOR_MODEL 2\n");
 		/*
 		 * This is a model -  see if model's bounding box is on screen
 		 */
 		if((s = BrOnScreenCheck(&this_model->bounds)) != OSC_REJECT) {
+			//printf("BR_ACTOR_MODEL 3\n");
 			BrLightCullReset();
+			//printf("BR_ACTOR_MODEL 4\n");
 			BrDbModelRender(ap, this_model, this_material, this_render_data, style, s, 1);
+			//printf("BR_ACTOR_MODEL 5\n");
 		}
 		break;
 
@@ -394,6 +423,7 @@ static void actorRender(br_actor *ap,
  			/* FALL THROUGH */
 
 		case OSC_REJECT:
+		//printf("BR_ACTOR_BOUNDS_CORRECT 4\n");
    			/*
 			 * Don't process children
 			 */
@@ -401,7 +431,7 @@ static void actorRender(br_actor *ap,
 			return;
 		}
 	}
-
+//printf("BR_ACTOR_BOUNDS_CORRECT 5\n");
 	/*
 	 * Recurse for children
 	 */
@@ -535,6 +565,7 @@ static void sceneRenderAdd(br_actor *tree)
 	br_actor *a;
 	br_int_32 t;
 	br_matrix34 m;
+	//printf("sceneRenderAdd 1\n");
 
 	if(tree->parent == NULL) {
 		/*
@@ -547,10 +578,10 @@ static void sceneRenderAdd(br_actor *tree)
 			(br_uint_16)v1db.ttype);
 		return;
 	}
-
+////printf("sceneRenderAdd 2\n");
 	t = BR_TRANSFORM_IDENTITY;
 	BrMatrix34Identity(&m);
-
+////printf("sceneRenderAdd 3\n");
 	/*
 	 * Walk back to current rendering root
 	 */
@@ -580,7 +611,7 @@ static void sceneRenderAdd(br_actor *tree)
 		 */
 		if(a == v1db.render_root)
 			break;
-
+////printf("sceneRenderAdd 4\n");
 		/*
 		 * Accumulate transform
 		 */
@@ -598,18 +629,18 @@ static void sceneRenderAdd(br_actor *tree)
 
 	if(render_data == NULL)
 		render_data = v1db.default_render_data;
-
+////printf("sceneRenderAdd 5\n");
 	if(t == BR_TRANSFORM_IDENTITY) {
 		actorRender(tree, model, material, render_data, style,
 			(br_uint_16)v1db.ttype);
 	} else {
 		RendererStatePush(v1db.renderer, BR_STATE_MATRIX);
-
+////printf("sceneRenderAdd 6\n");
 		t = prependMatrix(&m, (br_uint_16)t, (br_uint_16)v1db.ttype);
-
+//printf("sceneRenderAdd 7\n");
 		actorRender(tree, model, material, render_data, style,
 			(br_uint_16)t);
-
+//printf("sceneRenderAdd 8\n");
 		RendererStatePop(v1db.renderer, BR_STATE_MATRIX);
 	}
 }

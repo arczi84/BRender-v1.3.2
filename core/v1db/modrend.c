@@ -23,6 +23,8 @@ static void renderFaces(br_actor *actor,
 				  br_uint_8 style,
 				  int on_screen)
 {
+	  //printf("renderFaces start: actor=%p, model=%p, material=%p, render_data=%p, on_screen=%d\n", actor, model, material, render_data, on_screen);
+
 	if(model->stored) {
 		if(on_screen == BRT_ACCEPT)
 			GeometryStoredRenderOnScreen(model->stored, v1db.renderer);
@@ -32,8 +34,11 @@ static void renderFaces(br_actor *actor,
 	} else if(model->prepared) {
 		if(on_screen == BRT_ACCEPT)
 			GeometryV1ModelRenderOnScreen(v1db.format_model, v1db.renderer, model->prepared, material->stored, BRT_TRIANGLE);
-		else
-			GeometryV1ModelRender(v1db.format_model, v1db.renderer, model->prepared, material->stored, BRT_TRIANGLE);
+		else{
+			//printf("GEometryV1ModelRender start");
+			GeometryV1ModelRender(v1db.format_model, v1db.renderer, model->prepared, material->stored, BRT_TRIANGLE); //<<<this os3.2
+			//printf("GEometryV1ModelRender end");
+		}
 	}
 }
 

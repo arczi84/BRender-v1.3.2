@@ -494,6 +494,7 @@ br_token CameraToScreenMatrix4(br_matrix4 *mat, br_actor *camera)
 	UASSERT_MESSAGE("Invalid camera data range", camera_type->hither_z > S0);
 	UASSERT_MESSAGE("Invalid camera data condition1", camera_type->hither_z < camera_type->yon_z);
 
+	//printf("camera_type->aspect = %f\n", camera_type->aspect); 1.3333
 	switch(camera_type->type) {
 
 	case BR_CAMERA_PERSPECTIVE_FOV:

@@ -75,7 +75,7 @@ trapezium_render_size_params params[] = {
     { .pre = 0, .incu = 1, .decu = 1, .incv = 1, .decv = 1, .post1 = 0, .post2 = 0xffffffff },
 };
 
-static inline void ScanlineRender_ZPT_I8_D16(int size, int dirn, int udirn, int vdirn, tFog_enabled fogging, tBlend_enabled blend) {
+static inline void __attribute__((optimize("Ofast"))) ScanlineRender_ZPT_I8_D16(int size, int dirn, int udirn, int vdirn, tFog_enabled fogging, tBlend_enabled blend) {
     // ; Make temporary copies of parameters that change
 	// ;
 
@@ -1436,7 +1436,7 @@ carry:
     }
 }
 
-static inline void TrapeziumRender_ZPTI_I8_D16(int dirn, int size_param, tFog_enabled fog, tBlend_enabled blend) {
+static inline void __attribute__((optimize("Ofast"))) TrapeziumRender_ZPTI_I8_D16(int dirn, int size_param, tFog_enabled fog, tBlend_enabled blend) {
 
     // mov		ebx,work_top_count	; check for empty trapezium
     ebx.v = work_top_count;
@@ -1857,7 +1857,7 @@ void BR_ASM_CALL TriangleRender_ZPT_I8_D16_32(brp_block *block, ...) {
     // Not implemented
     BrAbort();
 }
-void BR_ASM_CALL TriangleRender_ZPTI_I8_D16_64(brp_block *block, ...) {
+void BR_ASM_CALL __attribute__((optimize("Ofast"))) TriangleRender_ZPTI_I8_D16_64(brp_block *block, ...) {
     va_list     va;
     va_start(va, block);
     brp_vertex *v0;

@@ -11,7 +11,7 @@
 #include "host.h"
 #include "host_ip.h"
 
-#ifdef __DOS__
+#if defined (__DOS__) || defined(AMIGA)
 
 void * BR_RESIDENT_ENTRY HostImageLoad(char *name)
 {
@@ -82,7 +82,7 @@ void * BR_RESIDENT_ENTRY HostImageLookupOrdinal(void *img, br_uint_32 ordinal)
 }
 #endif
 
-#if defined(__unix__) || defined(__linux__) || (defined (__APPLE__) && defined (__MACH__))
+#if 0//defined(__unix__) || defined(__linux__) || (defined (__APPLE__) && defined (__MACH__))
 
 #include <dlfcn.h>
 

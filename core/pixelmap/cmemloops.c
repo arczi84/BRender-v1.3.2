@@ -206,14 +206,12 @@ void _MemFill_A(uint8_t *dest, br_uint_32 dest_qual, br_uint_32 pixels, br_uint_
         /* If 3 fill bytes are the same, just use 1bpp fill */
         if((cols[0] == cols[1]) && (cols[0] == cols[2])) {
             _MemFill_A(dest, dest_qual, pixels * 3, 1, colour);
-        } else {
-            br_uint_32 i;
-            for(i = 0; i < pixels; ++i) {
+        } else
+            for(br_uint_32 i = 0; i < pixels; ++i) {
                 *dest++ = BR_BLU(colour);
                 *dest++ = BR_GRN(colour);
                 *dest++ = BR_RED(colour);
             }
-        }
     } else if(bpp == 1) {
         MemFill8(dest, (br_uint_8)(colour & 0xFF), pixels);
     }
@@ -225,12 +223,11 @@ void _MemRectCopy_A(char *dest,
 	br_int_32 d_stride,br_int_32 s_stride,
 	br_uint_32 bpp)
 {
-    int i;
     // const br_uint_32 linediff = pwidth * bpp;
     // s_stride -= linediff;
     // d_stride -= linediff;
 
-    for (i = 0; i < pheight; i++) {
+    for (int i = 0; i < pheight; i++) {
         memcpy(dest + i * d_stride, src + i * s_stride, bpp * pwidth);
     }
 
@@ -254,8 +251,7 @@ void _MemRectFill_A(char *dest,
     d_stride -= linediff;
 
     for(; pheight-- > 0; dest += d_stride) {
-        br_uint_32 w;
-        for(w = 0; w < pwidth; ++w, dest += bpp)
+        for(br_uint_32 w = 0; w < pwidth; ++w, dest += bpp)
             _MemPixelSet(dest, 0, bpp, colour);
     }
 }

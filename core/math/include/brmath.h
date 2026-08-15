@@ -35,7 +35,7 @@ float BR_PUBLIC_ENTRY BrFloatAtan2(float x, float y);
 /*
  * Compiler specific overrides
  */
-#if defined(__USE_CLIB__)
+#if 1//defined(__USE_CLIB__)
 
 #include <math.h>
 
