@@ -81,6 +81,14 @@ tSize_specific_params size_specific_params[] = {
 };
 
 static inline void ScanlineRender_ZPT_I8_D16(int dirn, tSize_specific_params *sized_params, int udirn, int vdirn, tFog_enabled fogging, tBlend_enabled blend) {
+    /*
+     * The translated x86 rasteriser normally uses the process-wide emulated
+     * registers.  They are scratch registers, and keeping them local lets the
+     * m68k compiler allocate them to real CPU registers throughout the pixel
+     * loop instead of repeatedly loading and storing global memory.
+     */
+    x86_reg eax, ebx, ecx, edx, ebp, edi, esi;
+
     // ; Make temporary copies of parameters that change
 	// ;
 
@@ -550,6 +558,8 @@ donev:
 }
 
 static inline void ScanlineRender_ZPTI_I8_D16(int dirn, tSize_specific_params *sized_params, int udirn, int vdirn, tFog_enabled fogging, tBlend_enabled blend) {
+    x86_reg eax, ebx, ecx, edx, ebp, edi, esi;
+
     // mov		edx,work.pu.current
     edx.v = work.pu.current;
     // mov		esi,work.pu.grad_x
@@ -1047,6 +1057,7 @@ donev:
 
 
 static inline void TrapeziumRender_ZPT_I8_D16(int dirn, tSize_specific_params *sized_params, tFog_enabled fogging, tBlend_enabled blend) {
+    x86_reg eax, ebx, ecx, edx, ebp, edi, esi;
 
     // mov		ebx,work_top_count	; check for empty trapezium
     ebx.v = work_top_count;
@@ -1442,6 +1453,7 @@ carry:
 }
 
 static inline void TrapeziumRender_ZPTI_I8_D16(int dirn, tSize_specific_params *sized_params, tFog_enabled fog, tBlend_enabled blend) {
+    x86_reg eax, ebx, ecx, edx, ebp, edi, esi;
 
     // mov		ebx,work_top_count	; check for empty trapezium
     ebx.v = work_top_count;

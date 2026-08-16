@@ -176,4 +176,18 @@ if(NOT MSVC)
 	target_compile_options(pentprim PRIVATE -fno-strict-aliasing)
 endif()
 
+if(AMIGA)
+	# The software profile spends roughly two thirds of the frame in these two
+	# pixel rasterizers.  Keep the conservative global flags used by the game,
+	# but restore the aggressive, previously tested Amiga settings only for the
+	# hot inner loops.  The explicit aliasing option remains required by the x86
+	# register-emulation unions used by these sources.
+	set_source_files_properties(
+		fti8pizp.c
+		zb8p2lit.c
+		PROPERTIES COMPILE_OPTIONS
+		"-Ofast;-fbbb=+;-funroll-loops;-ffast-math;-fno-strict-aliasing"
+	)
+endif()
+
 add_library(BRender::Drivers::SoftPrim ALIAS pentprim)

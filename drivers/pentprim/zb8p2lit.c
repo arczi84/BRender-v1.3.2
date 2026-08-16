@@ -7,6 +7,10 @@
 #include "common.h"
 
 void DRAW_ZTI_I8_D16_POW2(uint32_t *minorX, uint32_t *d_minorX, char direction, int32_t *halfCount, int pow2) {
+    /* These are scratch registers; locals allow m68k GCC to keep the hot
+     * pixel-loop state in real registers instead of global memory. */
+    x86_reg eax, ebx, ecx, edx, ebp, edi, esi;
+
     // local drawPixel,drawLine,done,lineDrawn,noPlot,mask
     uint32_t mask=0;
 // ; height test
