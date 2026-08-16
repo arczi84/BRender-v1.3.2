@@ -734,4 +734,3 @@ br_error BR_CMETHOD_DECL(br_primitive_state_3dfx, rangesQueryX)(
 
 	return BRE_OK;
 }
-

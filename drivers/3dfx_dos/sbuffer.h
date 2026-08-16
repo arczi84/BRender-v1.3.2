@@ -65,6 +65,9 @@ typedef struct br_buffer_stored {
 
 	/* pointers to pixel data */
 	void *pixels_pointer;
+	/* Owned power-of-two copy of the image, or NULL when none was needed. */
+	void *padded_pixels;
+	br_uint_32 padded_size;
 	void *pixels_converted;
 
 } br_buffer_stored;

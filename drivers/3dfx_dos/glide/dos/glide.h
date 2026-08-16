@@ -943,8 +943,10 @@ guTexSource( GrMipMapId_t id );
 /*
 ** linear frame buffer functions
 */
-FX_ENTRY void FX_CALL 
+FX_ENTRY void FX_CALL
 grLfbBegin( void );
+
+
 
 FX_ENTRY void FX_CALL 
 grLfbBypassMode( GrLfbBypassMode_t mode );

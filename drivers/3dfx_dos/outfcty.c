@@ -63,9 +63,18 @@ br_uint_32 OutputFacility3DfxInitialise(br_device *dev, br_primitive_library *pr
 	void *res;
 	char buf[256];
 
-//#define GLIDE_MODES_SUPPORTED	11
-#define GLIDE_MODES_SUPPORTED	4
+#ifdef AMIGA
+#define GLIDE_MODES_SUPPORTED 6
+#define GLIDE_COLOUR_MODES 1
+#else
+#define GLIDE_MODES_SUPPORTED 4
+#define GLIDE_COLOUR_MODES 2
+#endif
 	static br_uint_32 mode_list[3*GLIDE_MODES_SUPPORTED]={
+#ifdef AMIGA
+			GR_RESOLUTION_320x200,320,200,
+			GR_RESOLUTION_320x240,320,240,
+#endif
 //			GR_RESOLUTION_320x200,320,200,
 //			GR_RESOLUTION_320x240,320,240,
 //			GR_RESOLUTION_400x256,400,256,
@@ -84,7 +93,7 @@ br_uint_32 OutputFacility3DfxInitialise(br_device *dev, br_primitive_library *pr
 	/* Build an output facility for each possible 3Dfx mode */
 	res = Device3DfxResource(dev);
 
-	for (i=0; i<GLIDE_MODES_SUPPORTED*2; i++) {
+	for (i=0; i<GLIDE_MODES_SUPPORTED*GLIDE_COLOUR_MODES; i++) {
 		self = BrResAllocate(res, sizeof(*self), BR_MEMORY_OBJECT);
 
 		/* System stuff */
@@ -94,11 +103,16 @@ br_uint_32 OutputFacility3DfxInitialise(br_device *dev, br_primitive_library *pr
 		self->prim_lib			= prim_lib;
 
 		/* Copy details into output facility */
-		self->glide_res_code	= mode_list[3*(i/2)+0];
-		self->width				= mode_list[3*(i/2)+1];
-		self->height			= mode_list[3*(i/2)+2];
+		self->glide_res_code	= mode_list[3*(i/GLIDE_COLOUR_MODES)+0];
+		self->width				= mode_list[3*(i/GLIDE_COLOUR_MODES)+1];
+		self->height			= mode_list[3*(i/GLIDE_COLOUR_MODES)+2];
 
 		/* Build 555 and 565 mode buffers alternately */
+#ifdef AMIGA
+		self->colour_bits		= 16;
+		self->colour_type		= BR_PMT_RGB_565;
+		self->indexed			= BR_FALSE;
+#else
 		if (i % 2) {
 			self->colour_bits		= 16;
 			self->colour_type		= BR_PMT_RGB_565;
@@ -108,6 +122,7 @@ br_uint_32 OutputFacility3DfxInitialise(br_device *dev, br_primitive_library *pr
 			self->colour_type		= BR_PMT_RGB_555;
 			self->indexed			= BR_FALSE;
 		}
+#endif
 
 		self->depth_bits		= 16;
 		self->depth_type		= BR_PMT_DEPTH_16;
@@ -241,4 +256,3 @@ static struct br_output_facility_dispatch outputFacilityDispatch = {
 	BR_CMETHOD_REF(br_output_facility_3dfx,	pixelmapNew),
 	BR_CMETHOD_REF(br_output_facility_3dfx,	clutNew),
 };
-

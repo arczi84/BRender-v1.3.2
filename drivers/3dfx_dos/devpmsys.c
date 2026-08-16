@@ -100,7 +100,11 @@ br_error Allocate3DfxSysMemPixelmap(br_device_pixelmap *self, br_device_pixelmap
 	devpm->pm_width = w;
 	devpm->pm_height = h;
 	devpm->pm_row_bytes = tip->bits * tip->align * ((w+tip->align-1) / tip->align) / 8;
+#ifdef AMIGA
+	qual = 0;
+#else
 	HostSelectorDS(&qual);
+#endif
 	devpm->pm_pixels_qualifier = qual;
 	devpm->buffer_type = BT_SYSMEM;
 

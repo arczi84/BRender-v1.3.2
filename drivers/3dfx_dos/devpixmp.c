@@ -16,14 +16,23 @@
 #include "shortcut.h"
 #include "brassert.h"
 
+#if defined(FXA_CLEAR_STATE_AFTER_BLIT)
+/* The Amiga MiniGL shim composites direct LFB writes as a HUD overlay. */
+extern void FXA_MarkHudPixelAt(void *pixel);
+extern void FXA_LfbBeginMarkedWrite(void);
+extern void FXA_LfbEndMarkedWrite(void);
+extern void FXA_LfbSuspend(void);
+extern void FXA_LfbResume(void);
+#endif
+
 
 
 br_error Allocate3DfxSysMemPixelmap(br_device_pixelmap *self, br_device_pixelmap **newpm, int w, int h);
 
 br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, copyTo)(struct br_device_pixelmap *self, br_device_pixelmap *src);
 br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, copyFrom)(struct br_device_pixelmap *self, br_device_pixelmap *dest);
-br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, rectangleCopyTo)(struct br_device_pixelmap *self, br_point *p, br_device_pixelmap *src, br_rectangle *r);
-br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, rectangleCopyFrom)(struct br_device_pixelmap *self, br_point *p, br_device_pixelmap *dest, br_rectangle *r);
+static br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, rectangleCopyTo)(struct br_device_pixelmap *self, br_point *p, br_device_pixelmap *src, br_rectangle *r);
+static br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, rectangleCopyFrom)(struct br_device_pixelmap *self, br_point *p, br_device_pixelmap *dest, br_rectangle *r);
 
 
 
@@ -277,7 +286,11 @@ br_error DevicePixelmap3DfxAllocateMode(br_device *dev, br_output_facility *faci
 	self->pm_origin_y = 0;
 
 	self->pm_flags = BR_PMF_NO_ACCESS;
+#ifdef AMIGA
+	qual = 0;
+#else
 	HostSelectorDS(&qual);
+#endif
 	self->pm_pixels_qualifier = qual;
 	self->pm_base_x = 0;
 	self->pm_base_y = 0;
@@ -433,7 +446,11 @@ static br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, match)(br_device_pixelm
 		pm->pm_width = self->pm_width;
 		pm->pm_height = self->pm_height;
 		pm->pm_pixels = 0;
+#ifdef AMIGA
+		qual = 0;
+#else
 		HostSelectorDS(&qual);
+#endif
 		pm->pm_pixels_qualifier = qual;
 
 		pm->pm_origin_x = self->pm_origin_x;
@@ -470,7 +487,11 @@ static br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, match)(br_device_pixelm
 		pm->pm_width = self->pm_width;
 		pm->pm_height = self->pm_height;
 		pm->pm_pixels = 0;
+#ifdef AMIGA
+		qual = 0;
+#else
 		HostSelectorDS(&qual);
+#endif
 		self->pm_pixels_qualifier = qual;
 
 		pm->pm_origin_x = self->pm_origin_x;
@@ -768,11 +789,19 @@ static br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, pixelSet)
 {
 	br_point ap;
 	br_uint_16 *ptr;
+	br_uint_16 *pixel;
+	br_boolean marked_hud_write = BR_FALSE;
 	
 	if(PixelmapPointClip(&ap, p, (br_pixelmap *)self) == BR_CLIP_REJECT)
 		return BRE_OK;
 
-	grLfbBegin();
+#if defined(FXA_CLEAR_STATE_AFTER_BLIT)
+	marked_hud_write = self->buffer_type == BT_BACKSCREEN;
+	if(marked_hud_write)
+		FXA_LfbBeginMarkedWrite();
+	else
+#endif
+		grLfbBegin();
 	grLfbBypassMode(GR_LFBBYPASS_ENABLE);
 
 	if (self->buffer_type == BT_FRONTSCREEN)
@@ -782,14 +811,31 @@ static br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, pixelSet)
 	else if (self->buffer_type == BT_DEPTH)
 		ptr = grLfbGetWritePtr( GR_BUFFER_DEPTHBUFFER );
 	else {
-		grLfbEnd();
+		if(marked_hud_write)
+			FXA_LfbEndMarkedWrite();
+		else
+			grLfbEnd();
 		return(BRE_DEV_FAIL);
 	}
 
 	grLfbWriteMode( lfb_write_mode );
-	ptr[(ap.x+self->pm_base_x) + ((ap.y+self->pm_base_y) * 1024) ] = (FxU16)colour; 
+	pixel = &ptr[(ap.x+self->pm_base_x) + ((ap.y+self->pm_base_y) * 1024)];
+	*pixel = (FxU16)colour;
 
-	grLfbEnd();
+#if defined(FXA_CLEAR_STATE_AFTER_BLIT)
+	/* BrPixelmapLine() is implemented through pixelSet().  The A/P/O power
+	 * bars use that path, while text uses the separately instrumented masked
+	 * blit.  Without marking line pixels here they existed in the logical LFB
+	 * but were omitted from the MiniGL HUD overlay and disappeared behind the
+	 * 3D frame.  Depth and front-buffer writes are not HUD content. */
+	if(self->buffer_type == BT_BACKSCREEN)
+		FXA_MarkHudPixelAt(pixel);
+#endif
+
+	if(marked_hud_write)
+		FXA_LfbEndMarkedWrite();
+	else
+		grLfbEnd();
 
 	return BRE_OK;
 }
@@ -1316,6 +1362,12 @@ br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, rectangleStretchCopy)\
 		}
 		grChromakeyValue(0);
 		grDepthBufferMode(GR_DEPTHBUFFER_ZBUFFER);
+#if defined(AMIGA) || defined(FXA_CLEAR_STATE_AFTER_BLIT)
+		/* The direct 2D path changes Glide state behind match.c's cache.
+		 * Force the next 3D primitive to restore blend, chromakey, filtering,
+		 * depth and colour-combine instead of inheriting the blit's state. */
+		Clear3DfxStateCache();
+#endif
 		}
 
 
@@ -1422,6 +1474,39 @@ static br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, directUnlock)(br_device
     return(BRE_OK);
 }
 
+#if defined(FXA_CLEAR_STATE_AFTER_BLIT)
+/* Suspend a direct lock without committing it.  The caller uses this only to
+ * let GL render between CPU LFB operations; keeping the same snapshot means a
+ * single ordinary directUnlock() later captures every CPU change at once. */
+void FXA_SuspendPixelmapDirectLock(br_pixelmap *pixelmap)
+{
+	br_device_pixelmap *self = (br_device_pixelmap *)pixelmap;
+
+	FXA_LfbSuspend();
+	self->pm_pixels = NULL;
+	self->pm_row_bytes = 0;
+}
+
+void FXA_ResumePixelmapDirectLock(br_pixelmap *pixelmap)
+{
+	br_device_pixelmap *self = (br_device_pixelmap *)pixelmap;
+	br_uint_16 *ptr;
+
+	if (self->buffer_type == BT_FRONTSCREEN)
+		ptr = grLfbGetWritePtr(GR_BUFFER_FRONTBUFFER);
+	else if (self->buffer_type == BT_BACKSCREEN)
+		ptr = grLfbGetWritePtr(GR_BUFFER_BACKBUFFER);
+	else if (self->buffer_type == BT_DEPTH)
+		ptr = grLfbGetWritePtr(GR_BUFFER_DEPTHBUFFER);
+	else
+		return;
+
+	FXA_LfbResume();
+	self->pm_pixels = ptr + self->pm_base_x + (self->pm_base_y * 1024);
+	self->pm_row_bytes = 2048;
+}
+#endif
+
 
 
 /*
@@ -1499,4 +1584,3 @@ static struct br_device_pixelmap_dispatch devicePixelmapDispatch = {
 	BR_CMETHOD_REF(br_device_pixelmap_gen,	getControls),
 	BR_CMETHOD_REF(br_device_pixelmap_gen,	setControls),
 };
-

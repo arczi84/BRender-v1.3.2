@@ -199,8 +199,14 @@ static br_tv_template_entry primitiveTemplateEntries[] = {
 	{BRT(COLOUR_T),			F(prim.colour_type),Q | S | A,	BRTV_CONV_COPY,0,					1},
 	{BRT(COLOUR_B),			F(prim.colour_type),Q | S | A,	BRTV_CONV_BOOL_TOKEN,BRT_DEFAULT,	1},
 
-	{BRT(COLOUR_MAP_O),		F(prim.colour_map),	Q | S | A,	BRTV_CONV_COPY},
-	{BRT(TEXTURE_O),		F(prim.colour_map),	Q | S | A,	BRTV_CONV_COPY},
+	/* The colour map controls C_U/C_V through render_buffer.u_range/v_range.
+	 * Mark a map switch as a major state change so match.c calls
+	 * updateRanges().  Carmageddon changes this field alone for pedestrian
+	 * animation frames; treating it as minor left the previous frame's UV
+	 * scale cached, causing NPOT sprites to tile or crop depending on which
+	 * texture had been drawn immediately before them. */
+	{BRT(COLOUR_MAP_O),		F(prim.colour_map),	Q | S | A,	BRTV_CONV_COPY, 0,					1},
+	{BRT(TEXTURE_O),		F(prim.colour_map),	Q | S | A,	BRTV_CONV_COPY, 0,					1},
 
 	{BRT(FOG_T),			F(prim.fog_type),	Q | A | S,	BRTV_CONV_COPY},
 	{BRT(FOG_RGB),			F(prim.fog_colour),	Q | A | S,	BRTV_CONV_COPY},
@@ -250,7 +256,7 @@ static br_error BR_CMETHOD_DECL(br_primitive_state_3dfx, partSet)(
 		br_token part,
 		br_int_32 index,
 		br_token t,
-		br_uint_32 value)
+		br_value value)
 {
 	br_error r;
 	br_tv_template *tp = findTemplate(part);
@@ -593,4 +599,3 @@ static struct br_primitive_state_dispatch primitiveStateDispatch = {
     BR_CMETHOD_REF(br_primitive_state_3dfx, partQueryCapability),
     BR_CMETHOD_REF(br_primitive_state_3dfx, stateQueryPerformance),
 };
-

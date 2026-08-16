@@ -21,6 +21,8 @@ br_timestamp Prim3DfxDriverTimestamp = TIMESTAMP_START;
 br_device DriverDevice3Dfx = {
 #ifdef _WIN32
     NULL, "3dfx_win",
+#elif defined(AMIGA)
+    NULL, "3dfx_amiga",
 #else
     NULL, "3dfx_dos",
 #endif
@@ -87,9 +89,15 @@ br_error Device3DfxInitialise(br_device * self)
      */
     self->version           = BR_VERSION(1,1,2);
     self->creator           = "Volume 11 Software Development";
+#ifdef AMIGA
+    self->title             = "3Dfx BRender driver for Amiga MiniGL";
+    self->product           = "Warp3D through MiniGL";
+    self->product_version   = "Glide compatibility layer 0.1";
+#else
     self->title             = "3Dfx Voodoo Graphics Win95 Device Driver";
     self->product           = "3Dfx Voodoo Graphics";
     self->product_version   = "Voodoo Graphics Chipset/Glide 2.11";
+#endif
 
 	/*
 	 * Build CLUT object
@@ -343,4 +351,3 @@ static struct br_device_dispatch deviceDispatch = {
 	BR_CMETHOD_REF(br_object_container, findMany),
 	BR_CMETHOD_REF(br_object_container, count),
 };
-
