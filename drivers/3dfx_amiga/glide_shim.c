@@ -14,8 +14,14 @@
 #include "glideutl.h"
 #include <cybergraphx/cybergraphics.h>
 #include <proto/cybergraphics.h>
+#ifdef DETHRACE_AMIGA_SHARED_MINIGL
+#include <proto/minigl.h>
+#include <clib/minigl_open_protos.h>
+#else
 #include <mgl/gl.h>
+#endif
 
+#ifndef DETHRACE_AMIGA_SHARED_MINIGL
 /* The installed headers are newer than libmgl-cosmos.a: the library's
  * GLcontext has an extra 400 bytes before this tail.  These offsets come from
  * the library's MGLSwitchDisplay/MGLLockBack code and are part of its ABI. */
@@ -44,6 +50,7 @@ _Static_assert(offsetof(fx_mgl_cosmos_context, buffers) == 4296, "MiniGL cosmos 
 _Static_assert(offsetof(fx_mgl_cosmos_context, w3dBitMap) == 4308, "MiniGL cosmos ABI");
 _Static_assert(offsetof(fx_mgl_cosmos_context, bufNr) == 4316, "MiniGL cosmos ABI");
 _Static_assert(offsetof(fx_mgl_cosmos_context, numBuffers) == 4320, "MiniGL cosmos ABI");
+#endif
 
 #define FXA_MAX_TEXTURES 1024
 #define FXA_LFB_STRIDE_PIXELS 1024
@@ -192,6 +199,7 @@ static int bitmap_bytes_per_pixel(void)
     return 2;
 }
 
+#ifndef DETHRACE_AMIGA_SHARED_MINIGL
 static fx_mgl_cosmos_context *cosmos_context(void)
 {
     return (fx_mgl_cosmos_context *)(void *)mini_CurrentContext;
@@ -209,6 +217,7 @@ static struct BitMap *current_back_bitmap(void)
         return context->buffers[context->bufNr]->sb_BitMap;
     return NULL;
 }
+#endif
 
 static FxBool lock_back_buffer(void)
 {
@@ -217,6 +226,7 @@ static FxBool lock_back_buffer(void)
     ULONG pitch = 0;
 
     memset(&lfb_info, 0, sizeof(lfb_info));
+#ifndef DETHRACE_AMIGA_SHARED_MINIGL
     bitmap = current_back_bitmap();
     if(bitmap != NULL) {
         bitmap_lock_handle = LockBitMapTags(bitmap,
@@ -237,6 +247,11 @@ static FxBool lock_back_buffer(void)
             bitmap_lock_handle = NULL;
         }
     }
+#else
+    (void)bitmap;
+    (void)base;
+    (void)pitch;
+#endif
 
     /* Fallback for MiniGL implementations which do not expose a lockable
      * CyberGraphX bitmap. */
@@ -805,7 +820,11 @@ static void emit_vertex(const GrVertex *v)
     if(uses_texture())
         glTexCoord4f(v->tmuvtx[0].sow / texture_width,
             v->tmuvtx[0].tow / texture_height, 0.0f, v->oow);
-    glVertex3f(v->x, v->y, 1.0f - 2.0f * (v->ooz / 65535.0f));
+    /* Keep eye-space distance monotonic for MiniGL's fixed-function fog.
+     * Together with the 0..1 orthographic depth range below this produces
+     * exactly the same depth-buffer value as the old +1..-1 mapping, while
+     * avoiding abs(Z) fogging both the near and far planes to black. */
+    glVertex3f(v->x, v->y, -(v->ooz / 65535.0f));
 }
 
 void grDrawTriangle(const GrVertex *a, const GrVertex *b, const GrVertex *c)
@@ -898,14 +917,16 @@ FxBool grSstOpen(GrScreenResolution_t resolution, GrScreenRefresh_t refresh,
     int scissor_y = 0;
     (void)refresh; (void)format; (void)origin; (void)smoothing; (void)buffers;
     resolution_size(resolution, &screen_width, &screen_height);
-    if(cosmos_context() && cosmos_context()->w3dWindow) {
-        struct Window *window = cosmos_context()->w3dWindow;
+    {
+        struct Window *window = (struct Window *)mglGetWindowHandle();
+        if(window != NULL) {
         int inner_height = window->Height - window->BorderTop - window->BorderBottom;
         viewport_y = inner_height - screen_height;
         /* GLScissor in the cosmos MiniGL uses the outer Window->Height in
          * top = height - y - scissor_height.  Supplying this Y compensation
          * makes its private and Warp3D scissor state both resolve to top=0. */
         scissor_y = window->Height - screen_height;
+        }
     }
     glDisable(GL_SCISSOR_TEST);
     /* This MiniGL build derives OpenGL's bottom-origin Y offset from the
@@ -915,7 +936,7 @@ FxBool grSstOpen(GrScreenResolution_t resolution, GrScreenRefresh_t refresh,
     glScissor(0, scissor_y, screen_width, screen_height);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    glOrtho(0.0, screen_width, screen_height, 0.0, -1.0, 1.0);
+    glOrtho(0.0, screen_width, screen_height, 0.0, 0.0, 1.0);
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
     return FXTRUE;
@@ -1008,9 +1029,12 @@ void grFogColorValue(GrColor_t colour)
 }
 void grFogMode(GrFogMode_t mode)
 {
-    state_fog_enabled = mode != GR_FOG_DISABLE;
-    if(!state_fog_enabled) glDisable(GL_FOG);
-    else { glEnable(GL_FOG); glFogi(GL_FOG_MODE, GL_LINEAR); }
+    /* MiniGL's fixed-function fog does not use Glide's reciprocal-W fog
+     * coordinate and currently blacks out the complete Splat Pack scene.
+     * Keep it disabled until the Glide fog table is emulated explicitly. */
+    (void)mode;
+    state_fog_enabled = FXFALSE;
+    glDisable(GL_FOG);
 }
 void grFogTable(const GrFog_t table[GR_FOG_TABLE_SIZE])
 {

@@ -37,10 +37,26 @@ target_include_directories(3dfx_amiga PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../softrend/ddi
 )
 
-target_link_libraries(3dfx_amiga PRIVATE
-    BRender::DDI
-    ${AMIGA_SUPPORT_PATH}/lib/libmgl-new.a
-)
+target_link_libraries(3dfx_amiga PRIVATE BRender::DDI)
+
+if(DETHRACE_AMIGA_SHARED_MINIGL)
+    target_compile_definitions(3dfx_amiga PRIVATE DETHRACE_AMIGA_SHARED_MINIGL)
+    if(DETHRACE_AMIGA_SHARED_MINIGL_DISPATCH)
+        target_compile_definitions(3dfx_amiga PRIVATE DETHRACE_AMIGA_SHARED_MINIGL_DISPATCH)
+    else()
+        target_compile_definitions(3dfx_amiga PRIVATE MINIGL_REGISTER_LVO)
+    endif()
+    target_include_directories(3dfx_amiga BEFORE PRIVATE
+        "${DETHRACE_AMIGA_SHARED_MINIGL_ROOT}/include"
+    )
+else()
+    target_include_directories(3dfx_amiga BEFORE PRIVATE
+        "${DETHRACE_AMIGA_MINIGL_Q3_ROOT}/include"
+    )
+    target_link_libraries(3dfx_amiga PRIVATE
+        "${DETHRACE_AMIGA_MINIGL_Q3_ROOT}/lib/libmgl-q3.a"
+    )
+endif()
 
 set_target_properties(3dfx_amiga PROPERTIES
     C_STANDARD 11
