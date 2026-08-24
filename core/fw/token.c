@@ -29,6 +29,14 @@ static br_token_entry predefinedTokens[] = {
 #include "pretok.c"
 };
 
+/* Predefined token values are dense in the range 1..NEXT_FREE_TOKEN-1, but
+ * predefinedTokens[] itself is ordered by identifier.  Looking up a type by
+ * walking that linked list costs hundreds of comparisons and happens millions
+ * of times per frame sequence.  Keep the list for enumeration and dynamic
+ * tokens, plus a direct index for the predefined hot path. */
+static br_token_entry *predefinedTokenIndex[NEXT_FREE_TOKEN];
+static br_size_t predefinedTokenSize[NEXT_FREE_TOKEN];
+
 /*
  * Token Types
  *
@@ -61,8 +69,16 @@ void BrTokenBegin(void)
 	/*
 	 * Add all the predefined tokens
 	 */
-	for(i=0; i < BR_ASIZE(predefinedTokens); i++)
+	BrMemSet(predefinedTokenIndex, 0, sizeof(predefinedTokenIndex));
+	BrMemSet(predefinedTokenSize, 0, sizeof(predefinedTokenSize));
+	for(i=0; i < BR_ASIZE(predefinedTokens); i++) {
 		BR_ADDHEAD(&fw.tokens, predefinedTokens+i);
+		if(predefinedTokens[i].token < NEXT_FREE_TOKEN)
+			predefinedTokenIndex[predefinedTokens[i].token] = predefinedTokens+i;
+	}
+	for(i=0; i < BR_ASIZE(tokenTypes); i++)
+		if(tokenTypes[i].type < NEXT_FREE_TOKEN)
+			predefinedTokenSize[tokenTypes[i].type] = tokenTypes[i].size;
 
 	/*
 	 * Setup next unused token id
@@ -153,6 +169,11 @@ char * BR_RESIDENT_ENTRY BrTokenIdentifier(br_token t)
 {
 	br_token_entry *te;
 
+	if(t < NEXT_FREE_TOKEN) {
+		te = predefinedTokenIndex[t];
+		return te != NULL ? te->identifier : NULL;
+	}
+
 	BR_FOR_LIST(&fw.tokens, te)
 		if(t == te->token)
 			return te->identifier;
@@ -166,6 +187,11 @@ char * BR_RESIDENT_ENTRY BrTokenIdentifier(br_token t)
 br_token BR_RESIDENT_ENTRY BrTokenType(br_token t)
 {
 	br_token_entry *te;
+
+	if(t < NEXT_FREE_TOKEN) {
+		te = predefinedTokenIndex[t];
+		return te != NULL ? te->type : BR_NULL_TOKEN;
+	}
 
 	BR_FOR_LIST(&fw.tokens, te)
 		if(t == te->token)
@@ -202,6 +228,9 @@ br_size_t BR_RESIDENT_ENTRY BrTokenSize(br_token t)
     br_size_t i;
     if(t == BR_NULL_TOKEN)
         return 0;
+
+    if(t < NEXT_FREE_TOKEN)
+        return predefinedTokenSize[t];
 
     for(i = 0; i < BR_ASIZE(tokenTypes); ++i) {
         if(tokenTypes[i].type == t)

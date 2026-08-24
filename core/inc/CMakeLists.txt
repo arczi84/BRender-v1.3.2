@@ -9,7 +9,8 @@ target_include_directories(brender-inc INTERFACE
 target_compile_definitions(brender-inc INTERFACE
         BASED_FIXED=0
         BASED_FLOAT=1
-        PARANOID=1
+        $<$<CONFIG:Debug>:PARANOID=1>
+        $<$<NOT:$<CONFIG:Debug>>:PARANOID=0>
 )
 
 # This was moved to a manual process in the README to avoid depending on perl for regular builds

@@ -23,6 +23,10 @@ extern void FXA_LfbBeginMarkedWrite(void);
 extern void FXA_LfbEndMarkedWrite(void);
 extern void FXA_LfbSuspend(void);
 extern void FXA_LfbResume(void);
+extern void FXA_LfbSetWriteRegion(int x, int y, int width, int height);
+extern void FXA_LfbSetReadOnly(void);
+extern void FXA_LfbSetDirectWrite(void);
+extern void FXA_LfbCommitSolidRegion(int x, int y, int width, int height, br_uint_16 colour);
 #endif
 
 
@@ -534,6 +538,14 @@ static br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, rectangleFill)
 	if(PixelmapRectangleClip(&arect, rect, (br_pixelmap *)self) == BR_CLIP_REJECT)
 		return BRE_OK;
 
+#if defined(FXA_CLEAR_STATE_AFTER_BLIT)
+	/* Depth writes never affect the composited colour/HUD overlay. */
+	if(self->buffer_type == BT_DEPTH)
+		FXA_LfbSetReadOnly();
+	else
+		FXA_LfbSetWriteRegion(arect.x + self->pm_base_x,
+			arect.y + self->pm_base_y, arect.w, arect.h);
+#endif
 	grLfbBegin();
 	grLfbBypassMode(GR_LFBBYPASS_ENABLE);
 
@@ -566,6 +578,11 @@ static br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, rectangleFill)
 		ptr += 1024;
 	}
 
+#if defined(FXA_CLEAR_STATE_AFTER_BLIT)
+	if(self->buffer_type == BT_BACKSCREEN)
+		FXA_LfbCommitSolidRegion(arect.x + self->pm_base_x,
+			arect.y + self->pm_base_y, arect.w, arect.h, (br_uint_16)colour);
+#endif
 	grLfbEnd();
 
 	return BRE_OK;
@@ -641,6 +658,13 @@ br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, copy)(br_device_pixelmap *self
 	if ((self->pm_type != src->pm_type) || (self->pm_width != src->pm_width) || (self->pm_height != src->pm_height))
 		return(BRE_DEV_FAIL);
 
+#if defined(FXA_CLEAR_STATE_AFTER_BLIT)
+	if(self->buffer_type == BT_BACKSCREEN)
+		FXA_LfbSetDirectWrite();
+	else
+		FXA_LfbSetWriteRegion(self->pm_base_x, self->pm_base_y,
+			self->pm_width, self->pm_height);
+#endif
 	grLfbBegin();
 	grLfbBypassMode(GR_LFBBYPASS_ENABLE);
 
@@ -687,6 +711,10 @@ br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, copyTo)(struct br_device_pixel
 	if ((self->pm_type != src->pm_type) || (self->pm_width != src->pm_width) || (self->pm_height != src->pm_height))
 		return(BRE_DEV_FAIL);
 
+#if defined(FXA_CLEAR_STATE_AFTER_BLIT)
+	FXA_LfbSetWriteRegion(self->pm_base_x, self->pm_base_y,
+		self->pm_width, self->pm_height);
+#endif
 	grLfbBegin();
 	grLfbBypassMode(GR_LFBBYPASS_ENABLE);
 
@@ -731,6 +759,9 @@ br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, copyFrom)(struct br_device_pix
 			return(BRE_DEV_FAIL);
 	}
 
+#if defined(FXA_CLEAR_STATE_AFTER_BLIT)
+	FXA_LfbSetReadOnly();
+#endif
 	grLfbBegin();
 	grLfbBypassMode(GR_LFBBYPASS_ENABLE);
 
@@ -862,6 +893,10 @@ static br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, copyBits)
 	if(PixelmapCopyBitsClip(&ar, &ap, bit_rect, point, (br_pixelmap *)self) == BR_CLIP_REJECT)
 		return BRE_OK;
 
+#if defined(FXA_CLEAR_STATE_AFTER_BLIT)
+	FXA_LfbSetWriteRegion(ap.x + self->pm_base_x,
+		ap.y + self->pm_base_y, ar.w, ar.h);
+#endif
 	grLfbBegin();
 	grLfbBypassMode(GR_LFBBYPASS_ENABLE);
 
@@ -916,6 +951,10 @@ static br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, rectangleCopy)
 	if(PixelmapRectangleClipTwo(&ar, &ap, r, p, (br_pixelmap *)self, (br_pixelmap *)src) == BR_CLIP_REJECT)
 		return BRE_OK;
 
+#if defined(FXA_CLEAR_STATE_AFTER_BLIT)
+	FXA_LfbSetWriteRegion(ap.x + self->pm_base_x,
+		ap.y + self->pm_base_y, ar.w, ar.h);
+#endif
 	grLfbBegin();
 	grLfbBypassMode(GR_LFBBYPASS_ENABLE);
 
@@ -968,6 +1007,10 @@ static br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, rectangleCopyTo)
 	if(PixelmapRectangleClipTwo(&ar, &ap, r, p, (br_pixelmap *)self, (br_pixelmap *)src) == BR_CLIP_REJECT)
 		return BRE_OK;
 
+#if defined(FXA_CLEAR_STATE_AFTER_BLIT)
+	FXA_LfbSetWriteRegion(ap.x + self->pm_base_x,
+		ap.y + self->pm_base_y, ar.w, ar.h);
+#endif
 	grLfbBegin();
 	grLfbBypassMode(GR_LFBBYPASS_ENABLE);
 
@@ -1016,6 +1059,9 @@ static br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, rectangleCopyFrom)
 	if(PixelmapRectangleClipTwo(&ar, &ap, r, p, (br_pixelmap *)dest, (br_pixelmap *)self) == BR_CLIP_REJECT)
 		return BRE_OK;
 
+#if defined(FXA_CLEAR_STATE_AFTER_BLIT)
+	FXA_LfbSetReadOnly();
+#endif
 	grLfbBegin();
 	grLfbBypassMode(GR_LFBBYPASS_ENABLE);
 
@@ -1442,6 +1488,10 @@ static br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, directLock)(br_device_p
 {
 	br_uint_16 *ptr;
 
+#if defined(FXA_CLEAR_STATE_AFTER_BLIT)
+	FXA_LfbSetWriteRegion(self->pm_base_x, self->pm_base_y,
+		self->pm_width, self->pm_height);
+#endif
 	grLfbBegin();
 	grLfbBypassMode(GR_LFBBYPASS_ENABLE);
 

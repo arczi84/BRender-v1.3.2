@@ -82,7 +82,7 @@ static fx_amiga_texture textures[FXA_MAX_TEXTURES];
 static FxU32 palette[256];
 static GrErrorCallbackFnc_t error_callback;
 static GrColor_t chromakey;
-static GrColor_t constant_colour = 0xffffffffUL;
+static GLfloat constant_rgba[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 static GLint state_tex_min_filter = GL_NEAREST;
 static GLint state_tex_mag_filter = GL_NEAREST;
 static GLint state_tex_wrap_s = GL_REPEAT;
@@ -95,6 +95,8 @@ static int screen_width = 640;
 static int screen_height = 480;
 static int texture_width = 256;
 static int texture_height = 256;
+static GLfloat texture_inv_width = 1.0f / 256.0f;
+static GLfloat texture_inv_height = 1.0f / 256.0f;
 static FxBool chromakey_enabled;
 static int lfb_lock_depth;
 static int lfb_suspended_lock_depth;
@@ -113,9 +115,17 @@ static MGLLockInfo lfb_info;
 static APTR bitmap_lock_handle;
 static int lfb_precommitted;
 static int lfb_3d_prepared;
+static FxBool lfb_operation_region_valid;
+static FxBool lfb_operation_read_only;
+static FxBool lfb_operation_skip_scan;
+static int lfb_operation_min_x;
+static int lfb_operation_min_y;
+static int lfb_operation_max_x;
+static int lfb_operation_max_y;
 static unsigned long frame_3d_triangles;
 static unsigned long frame_3d_lines;
 static unsigned long frame_3d_points;
+static FxBool frame_world_rendered;
 static FxBool state_texture_enabled;
 static GLuint state_bound_texture;
 static FxBool state_blend_enabled;
@@ -130,6 +140,16 @@ static FxBool state_fog_enabled;
 static FxBool frame_depth_cleared;
 static FxBool frame_overlay_reset;
 static FxBool frame_surface_cleared;
+
+/* Keep MiniGL's proven immediate-mode/projective texture path, but avoid one
+ * glBegin/glEnd dispatch pair for every individual triangle.  MiniGL's vertex
+ * buffer holds 1024 vertices, so end the batch at the largest whole-triangle
+ * count below that limit. */
+#define FXA_IMMEDIATE_BATCH_VERTICES 1023
+static FxBool triangle_batch_open;
+static int triangle_batch_vertex_count;
+
+static void flush_triangle_batch(void);
 
 static FxU16 rgb_to_565(unsigned int r, unsigned int g, unsigned int b)
 {
@@ -280,6 +300,7 @@ static void unlock_back_buffer(void)
 static void capture_back_buffer(void)
 {
     int x, y, width, bytes_per_pixel;
+    flush_triangle_batch();
     glFinish();
     if(!lock_back_buffer())
         return;
@@ -308,6 +329,7 @@ static void commit_lfb_changes(void)
     /* DirectLock can span a complete frame.  Do not keep Warp3D locked while
      * MiniGL renders, and do not copy the whole stale CPU image over the 3D
      * result.  Merge only pixels which changed while the LFB was exposed. */
+    flush_triangle_batch();
     glFinish();
     if(!lock_back_buffer())
         return;
@@ -332,8 +354,12 @@ static void commit_lfb_changes(void)
 static void update_lfb_overlay_from_operation(void)
 {
     int x, y;
-    int min_x = screen_width, min_y = screen_height;
-    int max_x = -1, max_y = -1;
+    int scan_min_x = lfb_operation_region_valid ? lfb_operation_min_x : 0;
+    int scan_min_y = lfb_operation_region_valid ? lfb_operation_min_y : 0;
+    int scan_max_x = lfb_operation_region_valid ? lfb_operation_max_x : screen_width - 1;
+    int scan_max_y = lfb_operation_region_valid ? lfb_operation_max_y : screen_height - 1;
+    int min_x = scan_max_x + 1, min_y = scan_max_y + 1;
+    int max_x = scan_min_x - 1, max_y = scan_min_y - 1;
     unsigned long dirty = 0;
     unsigned long zero_writes = 0;
     FxBool large_zero_clear;
@@ -342,10 +368,10 @@ static void update_lfb_overlay_from_operation(void)
         lfb_overlay_colour == NULL || lfb_overlay_mask == NULL)
         return;
 
-    for(y = 0; y < screen_height; y++) {
+    for(y = scan_min_y; y <= scan_max_y; y++) {
         FxU16 *src = lfb_colour + y * FXA_LFB_STRIDE_PIXELS;
         FxU16 *old = lfb_lock_snapshot + y * FXA_LFB_STRIDE_PIXELS;
-        for(x = 0; x < screen_width; x++) {
+        for(x = scan_min_x; x <= scan_max_x; x++) {
             if(src[x] != old[x]) {
                 dirty++;
                 if(src[x] == 0) zero_writes++;
@@ -413,6 +439,7 @@ static void draw_lfb_layer(FxBool opaque)
 {
     int tile_x, tile_y, x, y;
     int texture_index = 0;
+    flush_triangle_batch();
     if(lfb_colour == NULL || lfb_overlay_colour == NULL || lfb_overlay_mask == NULL)
         return;
     if(lfb_tile_pixels == NULL)
@@ -522,6 +549,24 @@ static void draw_lfb_layer(FxBool opaque)
         }
     }
     restore_glide_state();
+}
+
+/* Carmageddon's TAB map is composed in a different order from the in-race
+ * HUD: first an opaque CPU-rendered map image, then MiniGL geometry on top.
+ * The original 3dfx path used BrPixelmapFlush() at that boundary, but the
+ * legacy driver implements flush as a no-op.  Present the logical LFB now so
+ * the following dim rectangle and 3D map view are layered over it, rather
+ * than treating the map as a HUD overlay at buffer swap. */
+void FXA_DrawLfbBackground(void)
+{
+    flush_triangle_batch();
+    if(lfb_overlay_mask != NULL)
+        memset(lfb_overlay_mask, 0,
+            (size_t)FXA_LFB_STRIDE_PIXELS * screen_height);
+    draw_lfb_layer(FXTRUE);
+    /* The opaque upload covers the complete target, so the normal first-GL-
+     * primitive clear must not erase it again. */
+    frame_surface_cleared = FXTRUE;
 }
 
 static void prepare_lfb_for_gl(void)
@@ -794,10 +839,8 @@ static void sync_texture_state(void)
 
 static void emit_vertex(const GrVertex *v)
 {
-    GLubyte rgba[4];
     float alpha;
-    unpack_colour(constant_colour, rgba);
-    alpha = rgba[3] / 255.0f;
+    alpha = constant_rgba[3];
     if(alpha_source == GR_ALPHASOURCE_TEXTURE_ALPHA)
         alpha = 1.0f;
     else if(alpha_source == GR_ALPHASOURCE_ITERATED_ALPHA)
@@ -815,11 +858,11 @@ static void emit_vertex(const GrVertex *v)
     if(uses_iterated_colour())
         glColor4f(v->r / 255.0f, v->g / 255.0f, v->b / 255.0f, alpha);
     else
-        glColor4f(rgba[0] / 255.0f, rgba[1] / 255.0f, rgba[2] / 255.0f, alpha);
+        glColor4f(constant_rgba[0], constant_rgba[1], constant_rgba[2], alpha);
 
     if(uses_texture())
-        glTexCoord4f(v->tmuvtx[0].sow / texture_width,
-            v->tmuvtx[0].tow / texture_height, 0.0f, v->oow);
+        glTexCoord4f(v->tmuvtx[0].sow * texture_inv_width,
+            v->tmuvtx[0].tow * texture_inv_height, 0.0f, v->oow);
     /* Keep eye-space distance monotonic for MiniGL's fixed-function fog.
      * Together with the 0..1 orthographic depth range below this produces
      * exactly the same depth-buffer value as the old +1..-1 mapping, while
@@ -827,10 +870,27 @@ static void emit_vertex(const GrVertex *v)
     glVertex3f(v->x, v->y, -(v->ooz / 65535.0f));
 }
 
+static void flush_triangle_batch(void)
+{
+    if(!triangle_batch_open)
+        return;
+    glEnd();
+    triangle_batch_open = FXFALSE;
+    triangle_batch_vertex_count = 0;
+}
+
 void grDrawTriangle(const GrVertex *a, const GrVertex *b, const GrVertex *c)
 {
     FxBool is_3d = !(vertex_has_screen_depth(a) &&
         vertex_has_screen_depth(b) && vertex_has_screen_depth(c));
+
+    /* These first-frame transitions can clear GL buffers.  Close a preceding
+     * 2D batch before allowing them to issue GL calls. */
+    if((!frame_surface_cleared && previous_frame_had_3d) ||
+        (is_3d && (!frame_depth_cleared ||
+            (!previous_frame_had_3d && !frame_overlay_reset))))
+        flush_triangle_batch();
+
     prepare_frame_surface();
     if(is_3d) {
         frame_3d_triangles++;
@@ -838,15 +898,22 @@ void grDrawTriangle(const GrVertex *a, const GrVertex *b, const GrVertex *c)
     } else {
         prepare_lfb_for_gl();
     }
-    sync_texture_state();
-    glBegin(GL_TRIANGLES);
+
+    if(triangle_batch_vertex_count + 3 > FXA_IMMEDIATE_BATCH_VERTICES)
+        flush_triangle_batch();
+    if(!triangle_batch_open) {
+        sync_texture_state();
+        glBegin(GL_TRIANGLES);
+        triangle_batch_open = FXTRUE;
+    }
     emit_vertex(a); emit_vertex(b); emit_vertex(c);
-    glEnd();
+    triangle_batch_vertex_count += 3;
 }
 
 void grDrawLine(const GrVertex *a, const GrVertex *b)
 {
     FxBool is_3d = !(vertex_has_screen_depth(a) && vertex_has_screen_depth(b));
+    flush_triangle_batch();
     prepare_frame_surface();
     if(is_3d) {
         frame_3d_lines++;
@@ -863,6 +930,7 @@ void grDrawLine(const GrVertex *a, const GrVertex *b)
 void grDrawPoint(const GrVertex *a)
 {
     FxBool is_3d = !vertex_has_screen_depth(a);
+    flush_triangle_batch();
     prepare_frame_surface();
     if(is_3d) {
         frame_3d_points++;
@@ -880,6 +948,7 @@ void grBufferClear(GrColor_t colour, GrAlpha_t alpha, FxU16 depth)
 {
     GLubyte c[4];
     GLbitfield bits = 0;
+    flush_triangle_batch();
     unpack_colour(colour, c);
     glClearColor(c[0] / 255.0f, c[1] / 255.0f, c[2] / 255.0f, alpha / 255.0f);
     glClearDepth(depth / 65535.0);
@@ -889,11 +958,23 @@ void grBufferClear(GrColor_t colour, GrAlpha_t alpha, FxU16 depth)
 }
 
 int grBufferNumPending(void) { return 0; }
+void FXA_BeginWorldFrame(void)
+{
+    /* The TAB map draws its dimmed 2D preview frame through BRender before
+     * the live 3D view.  MiniGL can classify that parallel-camera rectangle
+     * as geometry and let it populate the real depth buffer.  Start the live
+     * world with a fresh depth buffer so the rectangle cannot occlude every
+     * preview polygon.  Close its batch before the deferred clear. */
+    flush_triangle_batch();
+    frame_world_rendered = FXTRUE;
+    frame_depth_cleared = FXFALSE;
+}
 void grBufferSwap(int interval)
 {
-    FxBool has_3d = frame_3d_triangles != 0 ||
+    FxBool has_3d = frame_world_rendered || frame_3d_triangles != 0 ||
         frame_3d_lines != 0 || frame_3d_points != 0;
     (void)interval;
+    flush_triangle_batch();
     if(lfb_colour != NULL)
         draw_lfb_layer(has_3d ? FXFALSE : FXTRUE);
     glFlush();
@@ -901,12 +982,13 @@ void grBufferSwap(int interval)
     frame_3d_triangles = 0;
     frame_3d_lines = 0;
     frame_3d_points = 0;
+    frame_world_rendered = FXFALSE;
     frame_depth_cleared = FXFALSE;
     frame_overlay_reset = FXFALSE;
     frame_surface_cleared = FXFALSE;
     previous_frame_had_3d = has_3d;
 }
-void grRenderBuffer(GrBuffer_t buffer) { render_buffer = buffer; }
+void grRenderBuffer(GrBuffer_t buffer) { flush_triangle_batch(); render_buffer = buffer; }
 void grErrorSetCallback(GrErrorCallbackFnc_t fnc) { error_callback = fnc; }
 
 FxBool grSstOpen(GrScreenResolution_t resolution, GrScreenRefresh_t refresh,
@@ -958,6 +1040,7 @@ void grGlideInit(void) { memset(textures, 0, sizeof(textures)); }
 void grGlideShutdown(void)
 {
     int i;
+    flush_triangle_batch();
     for(i = 0; i < FXA_MAX_TEXTURES; i++)
         if(textures[i].used) glDeleteTextures(1, &textures[i].name);
     if(lfb_tiles_created) glDeleteTextures(FXA_LFB_TILE_COUNT, lfb_tile_textures);
@@ -969,15 +1052,24 @@ void grGlideShutdown(void)
     free(lfb_depth); lfb_depth = NULL;
     free(lfb_overlay_colour); lfb_overlay_colour = NULL;
     free(lfb_overlay_mask); lfb_overlay_mask = NULL;
+    lfb_operation_region_valid = FXFALSE;
+    lfb_operation_read_only = FXFALSE;
 }
 
 void grAlphaBlendFunction(GrAlphaBlendFnc_t rgb_sf, GrAlphaBlendFnc_t rgb_df,
     GrAlphaBlendFnc_t alpha_sf, GrAlphaBlendFnc_t alpha_df)
 {
+    GLenum new_src = blend_function(rgb_sf);
+    GLenum new_dst = blend_function(rgb_df);
+    FxBool new_enabled = !(rgb_sf == GR_BLEND_ONE && rgb_df == GR_BLEND_ZERO);
     (void)alpha_sf; (void)alpha_df;
-    state_blend_src = blend_function(rgb_sf);
-    state_blend_dst = blend_function(rgb_df);
-    state_blend_enabled = !(rgb_sf == GR_BLEND_ONE && rgb_df == GR_BLEND_ZERO);
+    if(state_blend_src == new_src && state_blend_dst == new_dst &&
+        state_blend_enabled == new_enabled)
+        return;
+    flush_triangle_batch();
+    state_blend_src = new_src;
+    state_blend_dst = new_dst;
+    state_blend_enabled = new_enabled;
     if(!state_blend_enabled)
         glDisable(GL_BLEND);
     else {
@@ -988,7 +1080,11 @@ void grAlphaBlendFunction(GrAlphaBlendFnc_t rgb_sf, GrAlphaBlendFnc_t rgb_df,
 
 void grChromakeyMode(GrChromakeyMode_t mode)
 {
-    chromakey_enabled = mode == GR_CHROMAKEY_ENABLE;
+    FxBool enabled = mode == GR_CHROMAKEY_ENABLE;
+    if(chromakey_enabled == enabled)
+        return;
+    flush_triangle_batch();
+    chromakey_enabled = enabled;
     if(chromakey_enabled) { glEnable(GL_ALPHA_TEST); glAlphaFunc(GL_GREATER, 0.0f); }
     else glDisable(GL_ALPHA_TEST);
 }
@@ -996,13 +1092,25 @@ void grChromakeyValue(GrColor_t value) { chromakey = value; }
 /* This MiniGL build declares GLColorMask but does not export it.  BRender only
  * requests the normal all-colour-channels state, which is already the default. */
 void grColorMask(FxBool rgb, FxBool alpha) { state_colour_mask_rgb = rgb; (void)alpha; }
-void grConstantColorValue(GrColor_t value) { constant_colour = value; }
+void grConstantColorValue(GrColor_t value)
+{
+    GLubyte rgba[4];
+    unpack_colour(value, rgba);
+    constant_rgba[0] = rgba[0] * (1.0f / 255.0f);
+    constant_rgba[1] = rgba[1] * (1.0f / 255.0f);
+    constant_rgba[2] = rgba[2] * (1.0f / 255.0f);
+    constant_rgba[3] = rgba[3] * (1.0f / 255.0f);
+}
 void grConstantColorValue4(float a, float r, float g, float b)
 {
-    constant_colour = ((FxU32)a << 24) | ((FxU32)r << 16) | ((FxU32)g << 8) | (FxU32)b;
+    grConstantColorValue(((FxU32)a << 24) | ((FxU32)r << 16) |
+        ((FxU32)g << 8) | (FxU32)b);
 }
 void grCullMode(GrCullMode_t mode)
 {
+    if(state_cull_mode == mode)
+        return;
+    flush_triangle_batch();
     state_cull_mode = mode;
     state_cull_enabled = mode != GR_CULL_DISABLE;
     if(!state_cull_enabled) glDisable(GL_CULL_FACE);
@@ -1012,20 +1120,36 @@ void grCullMode(GrCullMode_t mode)
         glCullFace(GL_BACK);
     }
 }
-void grDepthBufferFunction(GrCmpFnc_t fn) { glDepthFunc(compare_function(fn)); }
+void grDepthBufferFunction(GrCmpFnc_t fn)
+{
+    static GrCmpFnc_t current = (GrCmpFnc_t)-1;
+    if(current == fn)
+        return;
+    flush_triangle_batch();
+    current = fn;
+    glDepthFunc(compare_function(fn));
+}
 void grDepthBufferMode(GrDepthBufferMode_t mode)
 {
-    state_depth_enabled = mode != GR_DEPTHBUFFER_DISABLE;
+    FxBool enabled = mode != GR_DEPTHBUFFER_DISABLE;
+    if(state_depth_enabled == enabled)
+        return;
+    flush_triangle_batch();
+    state_depth_enabled = enabled;
     if(!state_depth_enabled) glDisable(GL_DEPTH_TEST);
     else glEnable(GL_DEPTH_TEST);
 }
-void grDepthMask(FxBool mask) { state_depth_mask = mask; glDepthMask(mask ? GL_TRUE : GL_FALSE); }
+void grDepthMask(FxBool mask)
+{
+    if(state_depth_mask == mask)
+        return;
+    flush_triangle_batch();
+    state_depth_mask = mask;
+    glDepthMask(mask ? GL_TRUE : GL_FALSE);
+}
 void grFogColorValue(GrColor_t colour)
 {
-    GLubyte c[4]; GLfloat f[4];
-    unpack_colour(colour, c);
-    f[0] = c[0] / 255.0f; f[1] = c[1] / 255.0f; f[2] = c[2] / 255.0f; f[3] = 1.0f;
-    glFogfv(GL_FOG_COLOR, f);
+    (void)colour;
 }
 void grFogMode(GrFogMode_t mode)
 {
@@ -1033,16 +1157,15 @@ void grFogMode(GrFogMode_t mode)
      * coordinate and currently blacks out the complete Splat Pack scene.
      * Keep it disabled until the Glide fog table is emulated explicitly. */
     (void)mode;
-    state_fog_enabled = FXFALSE;
-    glDisable(GL_FOG);
+    if(state_fog_enabled) {
+        flush_triangle_batch();
+        state_fog_enabled = FXFALSE;
+        glDisable(GL_FOG);
+    }
 }
 void grFogTable(const GrFog_t table[GR_FOG_TABLE_SIZE])
 {
-    int first = 0, last = GR_FOG_TABLE_SIZE - 1;
-    while(first < last && table[first] == 0) first++;
-    while(last > first && table[last] == 255) last--;
-    glFogf(GL_FOG_START, first / (float)(GR_FOG_TABLE_SIZE - 1));
-    glFogf(GL_FOG_END, (last + 1) / (float)(GR_FOG_TABLE_SIZE - 1));
+    (void)table;
 }
 
 FxU32 grTexCalcMemRequired(GrLOD_t small, GrLOD_t large, GrAspectRatio_t aspect, GrTextureFormat_t format)
@@ -1070,6 +1193,7 @@ void grTexDownloadMipMap(GrChipID_t tmu, FxU32 address, FxU32 mask, GrTexInfo *i
     GLubyte *pixels;
     int width, height;
     FxU32 span;
+    flush_triangle_batch();
     (void)tmu; (void)mask;
     /* BRender's texture cache evicts and reallocates blocks inside its own
      * simulated 16MB heap, so an address we already know can come back holding
@@ -1147,6 +1271,12 @@ void grTexSource(GrChipID_t tmu, FxU32 address, FxU32 mask, GrTexInfo *info)
     (void)tmu; (void)mask; (void)info;
     if(texture != NULL) {
         int largest = texture->width > texture->height ? texture->width : texture->height;
+        int new_width = texture->width * 256 / largest;
+        int new_height = texture->height * 256 / largest;
+        if(state_texture_enabled && state_bound_texture == texture->name &&
+            texture_width == new_width && texture_height == new_height)
+            return;
+        flush_triangle_batch();
         state_texture_enabled = FXTRUE;
         state_bound_texture = texture->name;
         glEnable(GL_TEXTURE_2D);
@@ -1155,12 +1285,17 @@ void grTexSource(GrChipID_t tmu, FxU32 address, FxU32 mask, GrTexInfo *info)
         /* Glide's s/t coordinates use a canonical 0..256 range at every LOD,
          * with only the aspect ratio reducing the shorter axis.  Dividing by
          * the physical size made 64px textures repeat four times. */
-        texture_width = texture->width * 256 / largest;
-        texture_height = texture->height * 256 / largest;
+        texture_width = new_width;
+        texture_height = new_height;
+        texture_inv_width = 1.0f / new_width;
+        texture_inv_height = 1.0f / new_height;
     } else {
         /* Selecting a texture we never cached must not leave the previous one
          * bound: the HUD's texture then bled onto world geometry (Max's face
          * tiled across buildings).  Fall back to untextured drawing. */
+        if(!state_texture_enabled && state_bound_texture == 0)
+            return;
+        flush_triangle_batch();
         state_texture_enabled = FXFALSE;
         state_bound_texture = 0;
         glDisable(GL_TEXTURE_2D);
@@ -1169,17 +1304,31 @@ void grTexSource(GrChipID_t tmu, FxU32 address, FxU32 mask, GrTexInfo *info)
 }
 void grTexClampMode(GrChipID_t tmu, GrTextureClampMode_t s, GrTextureClampMode_t t)
 {
+    GLint new_s;
+    GLint new_t;
     (void)tmu;
-    state_tex_wrap_s = s == GR_TEXTURECLAMP_CLAMP ? GL_CLAMP : GL_REPEAT;
-    state_tex_wrap_t = t == GR_TEXTURECLAMP_CLAMP ? GL_CLAMP : GL_REPEAT;
+    new_s = s == GR_TEXTURECLAMP_CLAMP ? GL_CLAMP : GL_REPEAT;
+    new_t = t == GR_TEXTURECLAMP_CLAMP ? GL_CLAMP : GL_REPEAT;
+    if(state_tex_wrap_s == new_s && state_tex_wrap_t == new_t)
+        return;
+    flush_triangle_batch();
+    state_tex_wrap_s = new_s;
+    state_tex_wrap_t = new_t;
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, state_tex_wrap_s);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, state_tex_wrap_t);
 }
 void grTexFilterMode(GrChipID_t tmu, GrTextureFilterMode_t min, GrTextureFilterMode_t mag)
 {
+    GLint new_min;
+    GLint new_mag;
     (void)tmu;
-    state_tex_min_filter = min == GR_TEXTUREFILTER_BILINEAR ? GL_LINEAR : GL_NEAREST;
-    state_tex_mag_filter = mag == GR_TEXTUREFILTER_BILINEAR ? GL_LINEAR : GL_NEAREST;
+    new_min = min == GR_TEXTUREFILTER_BILINEAR ? GL_LINEAR : GL_NEAREST;
+    new_mag = mag == GR_TEXTUREFILTER_BILINEAR ? GL_LINEAR : GL_NEAREST;
+    if(state_tex_min_filter == new_min && state_tex_mag_filter == new_mag)
+        return;
+    flush_triangle_batch();
+    state_tex_min_filter = new_min;
+    state_tex_mag_filter = new_mag;
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, state_tex_min_filter);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, state_tex_mag_filter);
 }
@@ -1191,6 +1340,9 @@ void grGammaCorrectionValue(float value) { (void)value; }
 void guAlphaSource(GrAlphaSource_t mode) { alpha_source = mode; }
 void guColorCombineFunction(GrColorCombineFnc_t fn)
 {
+    if(colour_combine == fn)
+        return;
+    flush_triangle_batch();
     colour_combine = fn;
     /* Only a grTexSource() binding may enable texturing.  This used to call
      * glEnable(GL_TEXTURE_2D) on its own, which re-armed whatever texture was
@@ -1209,6 +1361,9 @@ void guTexSource(GrMipMapId_t id)
     if(id == GR_NULL_MIPMAP_HANDLE) {
         /* Drop the binding too, so a later combine-mode change cannot resurrect
          * this texture on untextured geometry. */
+        if(!state_texture_enabled && state_bound_texture == 0)
+            return;
+        flush_triangle_batch();
         state_texture_enabled = FXFALSE;
         state_bound_texture = 0;
         glDisable(GL_TEXTURE_2D);
@@ -1238,6 +1393,30 @@ void FXA_MarkHudPixelAt(void *pixel)
         return;
     lfb_overlay_colour[offset] = lfb_colour[offset];
     lfb_overlay_mask[offset] = FXA_HUD_MASK_THIS_FRAME;
+}
+
+void FXA_MarkHudMaskedSpan(void *pixels, const FxU8 *source, int count)
+{
+    size_t offset;
+    size_t available;
+    int i;
+    if(lfb_overlay_mask == NULL || lfb_overlay_colour == NULL ||
+        lfb_colour == NULL || pixels == NULL || source == NULL || count <= 0)
+        return;
+    if((FxU16 *)pixels < lfb_colour)
+        return;
+    offset = (size_t)((FxU16 *)pixels - lfb_colour);
+    if(offset >= (size_t)FXA_LFB_STRIDE_PIXELS * screen_height)
+        return;
+    available = (size_t)FXA_LFB_STRIDE_PIXELS * screen_height - offset;
+    if((size_t)count > available)
+        count = (int)available;
+    for(i = 0; i < count; i++) {
+        if(source[i] != 0) {
+            lfb_overlay_colour[offset + i] = lfb_colour[offset + i];
+            lfb_overlay_mask[offset + i] = FXA_HUD_MASK_THIS_FRAME;
+        }
+    }
 }
 
 void FXA_ClearHudPixelAt(void *pixel)
@@ -1290,9 +1469,87 @@ static FxBool ensure_lfb_buffers(void)
     return FXTRUE;
 }
 
+void FXA_LfbSetWriteRegion(int x, int y, int width, int height)
+{
+    /* A nested operation shares the outer snapshot.  It cannot safely narrow
+     * that outer operation's final scan, so fall back to the complete LFB. */
+    if(lfb_lock_depth > 0) {
+        lfb_operation_region_valid = FXFALSE;
+        lfb_operation_read_only = FXFALSE;
+        return;
+    }
+    lfb_operation_read_only = FXFALSE;
+    if(width <= 0 || height <= 0) {
+        lfb_operation_region_valid = FXFALSE;
+        return;
+    }
+    if(x < 0) { width += x; x = 0; }
+    if(y < 0) { height += y; y = 0; }
+    if(x + width > screen_width) width = screen_width - x;
+    if(y + height > screen_height) height = screen_height - y;
+    if(width <= 0 || height <= 0) {
+        lfb_operation_region_valid = FXFALSE;
+        return;
+    }
+    lfb_operation_min_x = x;
+    lfb_operation_min_y = y;
+    lfb_operation_max_x = x + width - 1;
+    lfb_operation_max_y = y + height - 1;
+    lfb_operation_region_valid = FXTRUE;
+}
+
+void FXA_LfbSetReadOnly(void)
+{
+    if(lfb_lock_depth > 0)
+        return;
+    lfb_operation_region_valid = FXFALSE;
+    lfb_operation_read_only = FXTRUE;
+}
+
+void FXA_LfbSetDirectWrite(void)
+{
+    /* During an established 3D race frame the game writes HUD pixels through
+     * instrumented blitters.  Those writes update the overlay immediately, so
+     * snapshotting and comparing the complete 640x480 LFB at every temporary
+     * unlock only repeats work already done pixel-by-pixel.  Keep the scan for
+     * menus and transitions, where arbitrary uninstrumented CPU writes occur. */
+    lfb_operation_skip_scan = previous_frame_had_3d;
+    lfb_operation_region_valid = FXFALSE;
+    lfb_operation_read_only = FXFALSE;
+}
+
+void FXA_LfbCommitSolidRegion(int x, int y, int width, int height, FxU16 colour)
+{
+    int row;
+    if(!lfb_operation_skip_scan || lfb_overlay_colour == NULL ||
+        lfb_overlay_mask == NULL || width <= 0 || height <= 0)
+        return;
+    if(x < 0) { width += x; x = 0; }
+    if(y < 0) { height += y; y = 0; }
+    if(x + width > screen_width) width = screen_width - x;
+    if(y + height > screen_height) height = screen_height - y;
+    if(width <= 0 || height <= 0)
+        return;
+    if(colour == 0 && width >= screen_width * 3 / 4 &&
+        height >= screen_height * 3 / 4) {
+        memset(lfb_overlay_mask, 0,
+            (size_t)FXA_LFB_STRIDE_PIXELS * screen_height);
+        return;
+    }
+    for(row = y; row < y + height; row++) {
+        FxU16 *dst = lfb_overlay_colour + row * FXA_LFB_STRIDE_PIXELS + x;
+        FxU8 *mask = lfb_overlay_mask + row * FXA_LFB_STRIDE_PIXELS + x;
+        int column;
+        for(column = 0; column < width; column++)
+            dst[column] = colour;
+        memset(mask, FXA_HUD_MASK_THIS_FRAME, (size_t)width);
+    }
+}
+
 void grLfbBegin(void)
 {
-    size_t bytes;
+    int y;
+    flush_triangle_batch();
     if(lfb_lock_depth++ > 0)
         return;
     lfb_precommitted = 0;
@@ -1301,8 +1558,20 @@ void grLfbBegin(void)
         lfb_lock_depth = 0;
         return;
     }
-    bytes = (size_t)FXA_LFB_STRIDE_PIXELS * screen_height * sizeof(FxU16);
-    memcpy(lfb_lock_snapshot, lfb_colour, bytes);
+    if(lfb_operation_read_only || lfb_operation_skip_scan)
+        return;
+    if(lfb_operation_region_valid) {
+        size_t bytes = (size_t)(lfb_operation_max_x - lfb_operation_min_x + 1) *
+            sizeof(FxU16);
+        for(y = lfb_operation_min_y; y <= lfb_operation_max_y; y++)
+            memcpy(lfb_lock_snapshot + y * FXA_LFB_STRIDE_PIXELS +
+                    lfb_operation_min_x,
+                lfb_colour + y * FXA_LFB_STRIDE_PIXELS +
+                    lfb_operation_min_x, bytes);
+    } else {
+        size_t bytes = (size_t)FXA_LFB_STRIDE_PIXELS * screen_height * sizeof(FxU16);
+        memcpy(lfb_lock_snapshot, lfb_colour, bytes);
+    }
 }
 
 /* Pixelmap lines reach the back buffer as hundreds of individual pixelSet()
@@ -1313,6 +1582,8 @@ void FXA_LfbBeginMarkedWrite(void)
 {
     if(lfb_lock_depth++ > 0)
         return;
+    lfb_operation_region_valid = FXFALSE;
+    lfb_operation_read_only = FXFALSE;
     lfb_precommitted = 0;
     lfb_3d_prepared = 0;
     if(!ensure_lfb_buffers())
@@ -1345,6 +1616,13 @@ void FXA_LfbResume(void)
         return;
     lfb_lock_depth = lfb_suspended_lock_depth;
     lfb_suspended_lock_depth = 0;
+    /* LFB operations performed while the persistent back-screen lock was
+     * suspended have their own begin/end pair and reset the operation flags.
+     * Restore the outer direct-write policy instead of making its eventual
+     * unlock scan the complete colour buffer again. */
+    lfb_operation_region_valid = FXFALSE;
+    lfb_operation_read_only = FXFALSE;
+    lfb_operation_skip_scan = previous_frame_had_3d || frame_world_rendered;
 }
 
 void grLfbEnd(void)
@@ -1353,7 +1631,11 @@ void grLfbEnd(void)
         return;
     if(--lfb_lock_depth > 0)
         return;
-    update_lfb_overlay_from_operation();
+    if(!lfb_operation_read_only && !lfb_operation_skip_scan)
+        update_lfb_overlay_from_operation();
+    lfb_operation_region_valid = FXFALSE;
+    lfb_operation_read_only = FXFALSE;
+    lfb_operation_skip_scan = FXFALSE;
 }
 void grLfbBypassMode(GrLfbBypassMode_t mode) { (void)mode; }
 void grLfbWriteMode(GrLfbWriteMode_t mode) { (void)mode; }
