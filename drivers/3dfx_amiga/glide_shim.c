@@ -141,6 +141,7 @@ static FxBool state_fog_enabled;
 static FxBool frame_depth_cleared;
 static FxBool frame_overlay_reset;
 static FxBool frame_surface_cleared;
+static FxBool lfb_use_alpha_blending;
 
 /* Keep MiniGL's proven immediate-mode/projective texture path, but avoid one
  * glBegin/glEnd dispatch pair for every individual triangle.  MiniGL's vertex
@@ -151,6 +152,33 @@ static FxBool triangle_batch_open;
 static int triangle_batch_vertex_count;
 
 static void flush_triangle_batch(void);
+
+static FxBool gl_string_contains(const GLubyte *value, const char *needle)
+{
+    return value != NULL && strstr((const char *)value, needle) != NULL;
+}
+
+static FxBool is_pistorm3d_renderer(void)
+{
+    const GLubyte *renderer = glGetString(GL_RENDERER);
+    const GLubyte *vendor = glGetString(GL_VENDOR);
+    const GLubyte *version = glGetString(GL_VERSION);
+
+    /* PiStorm3D/MiniGLV3D currently does not reliably discard transparent
+     * texels through GL_ALPHA_TEST.  Keep the workaround backend-specific so
+     * the classic Cosmos MiniGL path retains its proven alpha-test overlay. */
+    return gl_string_contains(renderer, "PiStorm") ||
+        gl_string_contains(renderer, "pistorm") ||
+        gl_string_contains(renderer, "MiniGLV3D") ||
+        gl_string_contains(renderer, "MGLV3D") ||
+        gl_string_contains(renderer, "V3D") ||
+        gl_string_contains(vendor, "PiStorm") ||
+        gl_string_contains(vendor, "pistorm") ||
+        gl_string_contains(vendor, "V3D") ||
+        gl_string_contains(version, "PiStorm") ||
+        gl_string_contains(version, "pistorm") ||
+        gl_string_contains(version, "V3D");
+}
 
 static FxU16 rgb_to_565(unsigned int r, unsigned int g, unsigned int b)
 {
@@ -483,13 +511,22 @@ static void draw_lfb_layer(FxBool opaque)
     glDisable(GL_SCISSOR_TEST);
     glEnable(GL_TEXTURE_2D);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
-    glDisable(GL_BLEND);
     if(opaque) {
+        glDisable(GL_BLEND);
         glDisable(GL_ALPHA_TEST);
+    } else if(lfb_use_alpha_blending) {
+        /* PiStorm3D's alpha test can leave alpha-zero HUD texels opaque.  Its
+         * hardware blend path composes the same binary mask correctly and
+         * changes only state for the existing tile quads: no extra uploads or
+         * draw calls are introduced. */
+        glDisable(GL_ALPHA_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     } else {
         /* The HUD mask is binary.  Alpha blending in the old cosmos MiniGL
          * can leave zero-alpha texels opaque, hiding the world with black
          * 256x256 tiles.  Alpha testing discards those texels outright. */
+        glDisable(GL_BLEND);
         glEnable(GL_ALPHA_TEST);
         glAlphaFunc(GL_GREATER, 0.5f);
     }
@@ -1014,6 +1051,16 @@ FxBool grSstOpen(GrScreenResolution_t resolution, GrScreenRefresh_t refresh,
     int scissor_y = 0;
     (void)refresh; (void)format; (void)origin; (void)smoothing; (void)buffers;
     resolution_size(resolution, &screen_width, &screen_height);
+    lfb_use_alpha_blending = is_pistorm3d_renderer();
+    if(lfb_use_alpha_blending) {
+        /* Carmageddon submits already projected screen-space vertices and
+         * supplies Glide's s/w, t/w and 1/w through glTexCoord4f().  Unlike
+         * standard OpenGL's correction hint, MiniGL requires this extension
+         * state to make the backend interpolate those coordinates
+         * perspectively.  PiStorm3D otherwise uses affine interpolation and
+         * textures visibly swim across long walls and roads. */
+        glEnable(MGL_PERSPECTIVE_MAPPING);
+    }
     {
         struct Window *window = (struct Window *)mglGetWindowHandle();
         if(window != NULL) {
@@ -1537,8 +1584,8 @@ void FXA_LfbSetDirectWrite(void)
 void FXA_LfbCommitSolidRegion(int x, int y, int width, int height, FxU16 colour)
 {
     int row;
-    if(!lfb_operation_skip_scan || lfb_overlay_colour == NULL ||
-        lfb_overlay_mask == NULL || width <= 0 || height <= 0)
+    if(lfb_overlay_colour == NULL || lfb_overlay_mask == NULL ||
+        width <= 0 || height <= 0)
         return;
     if(x < 0) { width += x; x = 0; }
     if(y < 0) { height += y; y = 0; }
@@ -1546,6 +1593,11 @@ void FXA_LfbCommitSolidRegion(int x, int y, int width, int height, FxU16 colour)
     if(y + height > screen_height) height = screen_height - y;
     if(width <= 0 || height <= 0)
         return;
+    /* rectangleFill() supplies the exact affected rectangle and colour, so
+     * committing it here is complete.  Do not compare the same region again
+     * in grLfbEnd(); on PiStorm3D those redundant scans accounted for a large
+     * part of the frame time. */
+    lfb_operation_skip_scan = FXTRUE;
     if(colour == 0 && width >= screen_width * 3 / 4 &&
         height >= screen_height * 3 / 4) {
         memset(lfb_overlay_mask, 0,

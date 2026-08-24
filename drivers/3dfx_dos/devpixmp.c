@@ -1489,8 +1489,13 @@ static br_error BR_CMETHOD_DECL(br_device_pixelmap_3dfx, directLock)(br_device_p
 	br_uint_16 *ptr;
 
 #if defined(FXA_CLEAR_STATE_AFTER_BLIT)
-	FXA_LfbSetWriteRegion(self->pm_base_x, self->pm_base_y,
-		self->pm_width, self->pm_height);
+	if(self->buffer_type == BT_DEPTH)
+		FXA_LfbSetReadOnly();
+	else if(self->buffer_type == BT_BACKSCREEN)
+		FXA_LfbSetDirectWrite();
+	else
+		FXA_LfbSetWriteRegion(self->pm_base_x, self->pm_base_y,
+			self->pm_width, self->pm_height);
 #endif
 	grLfbBegin();
 	grLfbBypassMode(GR_LFBBYPASS_ENABLE);
