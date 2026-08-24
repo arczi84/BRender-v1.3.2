@@ -106,9 +106,10 @@ static FxU16 *lfb_lock_snapshot;
 static FxU16 *lfb_depth;
 static FxU16 *lfb_overlay_colour;
 static FxU8 *lfb_overlay_mask;
-static GLubyte *lfb_tile_pixels;
+static FxU32 *lfb_tile_cache;
 static GLuint lfb_tile_textures[FXA_LFB_TILE_COUNT];
 static FxBool lfb_tiles_created;
+static int lfb_active_tile_count;
 static FxBool lfb_initial_capture_done;
 static FxBool previous_frame_had_3d;
 static MGLLockInfo lfb_info;
@@ -439,18 +440,25 @@ static void draw_lfb_layer(FxBool opaque)
 {
     int tile_x, tile_y, x, y;
     int texture_index = 0;
+    size_t tile_pixel_count =
+        (size_t)FXA_LFB_TILE_SIZE * FXA_LFB_TILE_SIZE;
     flush_triangle_batch();
     if(lfb_colour == NULL || lfb_overlay_colour == NULL || lfb_overlay_mask == NULL)
         return;
-    if(lfb_tile_pixels == NULL)
-        lfb_tile_pixels = malloc(FXA_LFB_TILE_SIZE * FXA_LFB_TILE_SIZE * 4);
-    if(lfb_tile_pixels == NULL)
-        return;
     if(!lfb_tiles_created) {
-        glGenTextures(FXA_LFB_TILE_COUNT, lfb_tile_textures);
-        memset(lfb_tile_pixels, 0,
-            FXA_LFB_TILE_SIZE * FXA_LFB_TILE_SIZE * 4);
-        for(texture_index = 0; texture_index < FXA_LFB_TILE_COUNT; texture_index++) {
+        int tile_columns =
+            (screen_width + FXA_LFB_TILE_SIZE - 1) / FXA_LFB_TILE_SIZE;
+        int tile_rows =
+            (screen_height + FXA_LFB_TILE_SIZE - 1) / FXA_LFB_TILE_SIZE;
+        lfb_active_tile_count = tile_columns * tile_rows;
+        if(lfb_active_tile_count > FXA_LFB_TILE_COUNT)
+            return;
+        lfb_tile_cache = calloc((size_t)lfb_active_tile_count,
+            tile_pixel_count * sizeof(*lfb_tile_cache));
+        if(lfb_tile_cache == NULL)
+            return;
+        glGenTextures(lfb_active_tile_count, lfb_tile_textures);
+        for(texture_index = 0; texture_index < lfb_active_tile_count; texture_index++) {
             glBindTexture(GL_TEXTURE_2D, lfb_tile_textures[texture_index]);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -458,7 +466,8 @@ static void draw_lfb_layer(FxBool opaque)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
                 FXA_LFB_TILE_SIZE, FXA_LFB_TILE_SIZE, 0,
-                GL_RGBA, GL_UNSIGNED_BYTE, lfb_tile_pixels);
+                GL_RGBA, GL_UNSIGNED_BYTE,
+                lfb_tile_cache + (size_t)texture_index * tile_pixel_count);
         }
         texture_index = 0;
         lfb_tiles_created = FXTRUE;
@@ -492,31 +501,35 @@ static void draw_lfb_layer(FxBool opaque)
         for(tile_x = 0; tile_x < screen_width; tile_x += FXA_LFB_TILE_SIZE) {
             int tile_width = screen_width - tile_x;
             FxBool has_pixels = opaque;
+            FxBool tile_changed = FXFALSE;
+            FxU32 *tile_cache = lfb_tile_cache +
+                (size_t)texture_index * tile_pixel_count;
             if(tile_width > FXA_LFB_TILE_SIZE) tile_width = FXA_LFB_TILE_SIZE;
             for(y = 0; y < tile_height; y++) {
                 FxU16 *src = (opaque ? lfb_colour : lfb_overlay_colour) +
                     (tile_y + y) * FXA_LFB_STRIDE_PIXELS + tile_x;
                 FxU8 *mask = lfb_overlay_mask +
                     (tile_y + y) * FXA_LFB_STRIDE_PIXELS + tile_x;
-                GLubyte *dst = lfb_tile_pixels + y * FXA_LFB_TILE_SIZE * 4;
-                for(x = 0; x < tile_width; x++, dst += 4) {
+                FxU32 *dst = tile_cache + y * FXA_LFB_TILE_SIZE;
+                for(x = 0; x < tile_width; x++) {
                     FxU8 mark = mask[x];
                     FxBool changed = opaque || mark != 0;
+                    FxU32 rgba = 0;
                     if(changed) {
                         FxU16 pixel = src[x];
                         unsigned int r = (pixel >> 11) & 31;
                         unsigned int g = (pixel >> 5) & 63;
                         unsigned int b = pixel & 31;
-                        dst[0] = (GLubyte)((r << 3) | (r >> 2));
-                        dst[1] = (GLubyte)((g << 2) | (g >> 4));
-                        dst[2] = (GLubyte)((b << 3) | (b >> 2));
-                        dst[3] = 255;
+                        /* 68k is big-endian, so this word is stored in the
+                         * RGBA byte order expected by MiniGL. */
+                        rgba = (((r << 3) | (r >> 2)) << 24) |
+                            (((g << 2) | (g >> 4)) << 16) |
+                            (((b << 3) | (b >> 2)) << 8) | 255;
                         has_pixels = FXTRUE;
-                    } else {
-                        /* Alpha testing discards this texel; its RGB value is
-                         * irrelevant, so avoid three colour conversions for
-                         * the mostly empty in-race overlay. */
-                        dst[0] = dst[1] = dst[2] = dst[3] = 0;
+                    }
+                    if(dst[x] != rgba) {
+                        dst[x] = rgba;
+                        tile_changed = FXTRUE;
                     }
 
                     /* Retire the overlay while its mask row is already hot in
@@ -533,11 +546,13 @@ static void draw_lfb_layer(FxBool opaque)
                 float v = tile_height / (float)FXA_LFB_TILE_SIZE;
                 glBindTexture(GL_TEXTURE_2D, lfb_tile_textures[texture_index]);
                 /* The cosmos MiniGL build corrupts its render region after
-                 * GLTexSubImage2D; redefine the tile instead.  This happens
-                 * only once per tile/frame now, not once per LFB lock. */
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
-                    FXA_LFB_TILE_SIZE, FXA_LFB_TILE_SIZE, 0,
-                    GL_RGBA, GL_UNSIGNED_BYTE, lfb_tile_pixels);
+                 * GLTexSubImage2D.  Keep glTexImage2D, but avoid redefining a
+                 * tile whose RGBA contents are identical to the texture
+                 * already resident in MiniGL. */
+                if(tile_changed)
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
+                        FXA_LFB_TILE_SIZE, FXA_LFB_TILE_SIZE, 0,
+                        GL_RGBA, GL_UNSIGNED_BYTE, tile_cache);
                 glBegin(GL_QUADS);
                 glTexCoord2f(0.0f, 0.0f); glVertex3f(tile_x, tile_y, 0.0f);
                 glTexCoord2f(u, 0.0f); glVertex3f(tile_x + tile_width, tile_y, 0.0f);
@@ -1043,9 +1058,10 @@ void grGlideShutdown(void)
     flush_triangle_batch();
     for(i = 0; i < FXA_MAX_TEXTURES; i++)
         if(textures[i].used) glDeleteTextures(1, &textures[i].name);
-    if(lfb_tiles_created) glDeleteTextures(FXA_LFB_TILE_COUNT, lfb_tile_textures);
+    if(lfb_tiles_created) glDeleteTextures(lfb_active_tile_count, lfb_tile_textures);
     lfb_tiles_created = FXFALSE;
-    free(lfb_tile_pixels); lfb_tile_pixels = NULL;
+    lfb_active_tile_count = 0;
+    free(lfb_tile_cache); lfb_tile_cache = NULL;
     free(lfb_colour); lfb_colour = NULL;
     free(lfb_original); lfb_original = NULL;
     free(lfb_lock_snapshot); lfb_lock_snapshot = NULL;
